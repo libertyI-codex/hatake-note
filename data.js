@@ -253,6 +253,72 @@
     }));
   }
 
+  function deletePhotos(photoIds) {
+    const ids = Array.isArray(photoIds) ? photoIds.filter(Boolean) : [];
+
+    if (!ids.length) {
+      return Promise.resolve();
+    }
+
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+
+      ids.forEach((photoId) => store.delete(photoId));
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error || new Error("写真の削除に失敗しました。"));
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error || new Error("写真の削除が中断されました。"));
+      };
+    }));
+  }
+
+  function updatePhotosPlot(photoIds, plotId) {
+    const ids = Array.isArray(photoIds) ? photoIds.filter(Boolean) : [];
+
+    if (!ids.length) {
+      return Promise.resolve();
+    }
+
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+
+      ids.forEach((photoId) => {
+        const request = store.get(photoId);
+
+        request.onsuccess = () => {
+          const photo = request.result;
+
+          if (photo) {
+            store.put({ ...photo, plotId });
+          }
+        };
+      });
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error || new Error("写真情報の更新に失敗しました。"));
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error || new Error("写真情報の更新が中断されました。"));
+      };
+    }));
+  }
+
   window.HatakeData = {
     STORAGE_KEY,
     WORK_RECORDS_STORAGE_KEY,
@@ -273,6 +339,8 @@
     createPhotoId,
     savePhotos,
     getPhotosByIds,
-    getPhotosByPlotId
+    getPhotosByPlotId,
+    deletePhotos,
+    updatePhotosPlot
   };
 })();

@@ -71,6 +71,10 @@
     return workRecords.find((record) => record.id === workRecordId);
   }
 
+  function findSchedule(scheduleId) {
+    return schedules.find((schedule) => schedule.id === scheduleId);
+  }
+
   function releasePhotoObjectUrls() {
     activePhotoUrls.forEach((url) => URL.revokeObjectURL(url));
     activePhotoUrls = [];
@@ -108,8 +112,8 @@
       const isActive =
         (nav === "home" && route === "home") ||
         (nav === "plots" && (route === "plots" || route.startsWith("plot/"))) ||
-        (nav === "work" && route === "work-new") ||
-        (nav === "schedules" && (route === "schedules" || route === "schedule-new")) ||
+        (nav === "work" && (route === "work-new" || route.startsWith("work-edit/"))) ||
+        (nav === "schedules" && (route === "schedules" || route === "schedule-new" || route.startsWith("schedule-edit/"))) ||
         (nav === "new" && route === "plot-new");
 
       button.classList.toggle("is-active", isActive);
@@ -138,6 +142,7 @@
     const plotName = plot ? plot.name : "削除済みの区画";
     const cropName = plot ? plot.cropName : "作物未設定";
     const photoIds = workRecordPhotoIds(record);
+    const recordId = escapeHtml(record.id);
 
     return `
       <article class="card work-record-card">
@@ -151,6 +156,10 @@
         <p class="work-plot">${escapeHtml(cropName)}</p>
         <p class="work-memo">${escapeHtml(record.memo || "メモはありません。")}</p>
         ${photoStripHtml(photoIds)}
+        <div class="card-actions">
+          <button class="btn btn--compact" type="button" data-action="edit-work-record" data-id="${recordId}">編集</button>
+          <button class="btn btn--compact btn--danger" type="button" data-action="delete-work-record" data-id="${recordId}">削除</button>
+        </div>
       </article>
     `;
   }
@@ -196,6 +205,7 @@
     const showPlot = options.showPlot !== false;
     const showMemo = options.showMemo !== false;
     const showCheckbox = options.showCheckbox !== false;
+    const showActions = options.showActions !== false;
     const scheduleId = escapeHtml(schedule.id);
     const checkboxId = `schedule-done-${scheduleId}`;
 
@@ -217,6 +227,16 @@
                 <input class="schedule-checkbox" id="${checkboxId}" type="checkbox" data-action="toggle-schedule-done" data-id="${scheduleId}" ${schedule.done ? "checked" : ""}>
                 <span>完了</span>
               </label>
+            `
+            : ""
+        }
+        ${
+          showActions
+            ? `
+              <div class="card-actions">
+                <button class="btn btn--compact" type="button" data-action="edit-schedule" data-id="${scheduleId}">編集</button>
+                <button class="btn btn--compact btn--danger" type="button" data-action="delete-schedule" data-id="${scheduleId}">削除</button>
+              </div>
             `
             : ""
         }
@@ -304,6 +324,7 @@
             <div>
               <p class="work-date">${escapeHtml(recordDate)}</p>
               <p class="work-type">${escapeHtml(workType)}</p>
+              <button class="btn btn--compact btn--danger" type="button" data-action="delete-photo" data-id="${escapeHtml(photo.id)}">写真を削除</button>
             </div>
           </article>
         `;
@@ -405,7 +426,7 @@
 
         <section class="section" aria-labelledby="home-plan-title">
           <h2 id="home-plan-title">今日・近日中にやる予定</h2>
-          ${scheduleListHtml(upcomingSchedules, "未完了の予定はまだありません。予定画面から追加できます。", { showMemo: false, showCheckbox: false })}
+          ${scheduleListHtml(upcomingSchedules, "未完了の予定はまだありません。予定画面から追加できます。", { showMemo: false, showCheckbox: false, showActions: false })}
         </section>
       </section>
     `;
@@ -599,8 +620,23 @@
     }
   }
 
-  function renderWorkRecordForm() {
+  function renderWorkRecordForm(workRecordId) {
     clearSelectedPhotos();
+    const isEdit = Boolean(workRecordId);
+    const record = isEdit ? findWorkRecord(workRecordId) : null;
+
+    if (isEdit && !record) {
+      app.innerHTML = `
+        <section class="view">
+          <div class="panel panel--empty">
+            <h2>作業記録が見つかりません</h2>
+            <p class="empty-text">保存済みデータから対象の作業記録を見つけられませんでした。</p>
+          </div>
+          <button class="btn btn--primary" type="button" data-action="go-home">ホームへ戻る</button>
+        </section>
+      `;
+      return;
+    }
 
     if (!plots.length) {
       app.innerHTML = `
@@ -615,50 +651,67 @@
       return;
     }
 
+    const selectedPlotId = record ? record.plotId : plots[0].id;
+    const selectedWorkType = record ? record.workType : "水やり";
+
     app.innerHTML = `
       <section class="view">
         <div>
-          <h2>作業記録を追加</h2>
-          <p class="empty-text">作業した区画を選んで、日付と内容を記録します。</p>
+          <h2>${isEdit ? "作業記録を編集" : "作業記録を追加"}</h2>
+          <p class="empty-text">${isEdit ? "日付、区画、作業内容、メモを修正できます。既存写真は維持されます。" : "作業した区画を選んで、日付と内容を記録します。"}</p>
         </div>
 
         <form class="form" id="work-form" novalidate>
+          <input type="hidden" name="id" value="${escapeHtml(record ? record.id : "")}">
+
           <div class="field">
             <label for="work-date">日付</label>
-            <input id="work-date" name="date" type="date" value="${escapeHtml(todayValue())}" required>
+            <input id="work-date" name="date" type="date" value="${escapeHtml(record ? record.date : todayValue())}" required>
           </div>
 
           <div class="field">
             <label for="work-plot">区画</label>
             <select id="work-plot" name="plotId" required>
-              ${plotOptions(plots[0].id)}
+              ${plotOptions(selectedPlotId)}
             </select>
           </div>
 
           <div class="field">
             <label for="work-type">作業内容</label>
             <select id="work-type" name="workType" required>
-              ${workTypeOptions("水やり")}
+              ${workTypeOptions(selectedWorkType)}
             </select>
           </div>
 
           <div class="field">
             <label for="work-memo">メモ</label>
-            <textarea id="work-memo" name="memo" maxlength="500" placeholder="作業した量、気づいたこと、次に見ることなど"></textarea>
+            <textarea id="work-memo" name="memo" maxlength="500" placeholder="作業した量、気づいたこと、次に見ることなど">${escapeHtml(record ? record.memo : "")}</textarea>
             <p class="form-help">500文字まで保存できます。</p>
           </div>
 
-          <div class="field">
-            <label for="work-photos">写真</label>
-            <input id="work-photos" name="photos" type="file" accept="image/*" multiple>
-            <p class="form-help">1つの作業記録につき最大3枚まで保存できます。保存前に縮小します。</p>
-            <div class="form-message" id="photo-message" aria-live="polite"></div>
-            <div class="photo-preview-grid" id="photo-preview"></div>
-          </div>
+          ${
+            isEdit
+              ? `
+                <div class="panel panel--empty">
+                  <h3>写真</h3>
+                  <p class="empty-text">既存写真は維持されます。写真の追加は今回は未対応です。</p>
+                  ${photoStripHtml(workRecordPhotoIds(record))}
+                </div>
+              `
+              : `
+                <div class="field">
+                  <label for="work-photos">写真</label>
+                  <input id="work-photos" name="photos" type="file" accept="image/*" multiple>
+                  <p class="form-help">1つの作業記録につき最大3枚まで保存できます。保存前に縮小します。</p>
+                  <div class="form-message" id="photo-message" aria-live="polite"></div>
+                  <div class="photo-preview-grid" id="photo-preview"></div>
+                </div>
+              `
+          }
 
           <div class="button-row">
             <button class="btn btn--primary" type="button" data-action="save-work-record">保存する</button>
-            <button class="btn" type="button" data-action="go-home">キャンセル</button>
+            <button class="btn" type="button" data-action="${isEdit ? "open-plot" : "go-home"}" ${isEdit ? `data-id="${escapeHtml(selectedPlotId)}"` : ""}>キャンセル</button>
           </div>
         </form>
       </section>
@@ -667,6 +720,10 @@
     const firstInput = app.querySelector("#work-date");
     if (firstInput) {
       firstInput.focus();
+    }
+
+    if (isEdit) {
+      hydratePhotoElements();
     }
   }
 
@@ -786,6 +843,7 @@
 
     app.innerHTML = `
       <section class="view">
+        ${flashMessageHtml()}
         <div class="detail-header">
           <div>
             <h2>育成スケジュール</h2>
@@ -798,7 +856,23 @@
     `;
   }
 
-  function renderScheduleForm() {
+  function renderScheduleForm(scheduleId) {
+    const isEdit = Boolean(scheduleId);
+    const schedule = isEdit ? findSchedule(scheduleId) : null;
+
+    if (isEdit && !schedule) {
+      app.innerHTML = `
+        <section class="view">
+          <div class="panel panel--empty">
+            <h2>予定が見つかりません</h2>
+            <p class="empty-text">保存済みデータから対象の予定を見つけられませんでした。</p>
+          </div>
+          <button class="btn btn--primary" type="button" data-action="go-schedules">予定一覧へ戻る</button>
+        </section>
+      `;
+      return;
+    }
+
     if (!plots.length) {
       app.innerHTML = `
         <section class="view">
@@ -815,33 +889,40 @@
     app.innerHTML = `
       <section class="view">
         <div>
-          <h2>予定を追加</h2>
-          <p class="empty-text">区画ごとの次にやる作業を予定として登録します。</p>
+          <h2>${isEdit ? "予定を編集" : "予定を追加"}</h2>
+          <p class="empty-text">${isEdit ? "区画、作業予定名、予定日、メモ、完了状態を修正できます。" : "区画ごとの次にやる作業を予定として登録します。"}</p>
         </div>
 
         <form class="form" id="schedule-form" novalidate>
+          <input type="hidden" name="id" value="${escapeHtml(schedule ? schedule.id : "")}">
+
           <div class="field">
             <label for="schedule-plot">区画</label>
             <select id="schedule-plot" name="plotId" required>
-              ${plotOptions(plots[0].id)}
+              ${plotOptions(schedule ? schedule.plotId : plots[0].id)}
             </select>
           </div>
 
           <div class="field">
             <label for="schedule-title">作業予定名</label>
-            <input id="schedule-title" name="title" type="text" required maxlength="60" autocomplete="off" placeholder="例：つる返し">
+            <input id="schedule-title" name="title" type="text" required maxlength="60" autocomplete="off" placeholder="例：つる返し" value="${escapeHtml(schedule ? schedule.title : "")}">
           </div>
 
           <div class="field">
             <label for="schedule-date">予定日</label>
-            <input id="schedule-date" name="date" type="date" value="${escapeHtml(todayValue())}" required>
+            <input id="schedule-date" name="date" type="date" value="${escapeHtml(schedule ? schedule.date : todayValue())}" required>
           </div>
 
           <div class="field">
             <label for="schedule-memo">メモ</label>
-            <textarea id="schedule-memo" name="memo" maxlength="500" placeholder="作業の目安、見るポイント、必要な道具など"></textarea>
+            <textarea id="schedule-memo" name="memo" maxlength="500" placeholder="作業の目安、見るポイント、必要な道具など">${escapeHtml(schedule ? schedule.memo : "")}</textarea>
             <p class="form-help">500文字まで保存できます。</p>
           </div>
+
+          <label class="schedule-check">
+            <input class="schedule-checkbox" name="done" type="checkbox" ${schedule && schedule.done ? "checked" : ""}>
+            <span>完了済みにする</span>
+          </label>
 
           <div class="button-row">
             <button class="btn btn--primary" type="button" data-action="save-schedule">保存する</button>
@@ -895,12 +976,14 @@
 
   async function saveWorkRecordFromForm(form) {
     const formData = new FormData(form);
+    const id = String(formData.get("id") || "");
     const now = new Date().toISOString();
+    const existingRecord = id ? findWorkRecord(id) : null;
     const plotId = String(formData.get("plotId") || "");
     const date = String(formData.get("date") || "");
     const workType = String(formData.get("workType") || "");
-    const workRecordId = HatakeData.createWorkRecordId();
-    let photoIds = [];
+    const workRecordId = existingRecord ? existingRecord.id : HatakeData.createWorkRecordId();
+    let photoIds = existingRecord ? workRecordPhotoIds(existingRecord) : [];
 
     if (!date || !plotId || !workType) {
       alert("日付、区画、作業内容を入力してください。");
@@ -912,7 +995,7 @@
       return;
     }
 
-    if (selectedPhotoFiles.length) {
+    if (!existingRecord && selectedPhotoFiles.length) {
       try {
         const photos = await buildPhotoRecords(selectedPhotoFiles, workRecordId, plotId);
         await HatakeData.savePhotos(photos);
@@ -924,6 +1007,15 @@
       }
     }
 
+    if (existingRecord && existingRecord.plotId !== plotId && photoIds.length) {
+      try {
+        await HatakeData.updatePhotosPlot(photoIds, plotId);
+      } catch (error) {
+        console.error("写真情報の更新に失敗しました。", error);
+        setFlashMessage("作業記録は更新しましたが、写真情報の区画更新に失敗した可能性があります。");
+      }
+    }
+
     const workRecord = {
       id: workRecordId,
       plotId,
@@ -931,22 +1023,101 @@
       workType,
       memo: String(formData.get("memo") || "").trim(),
       photoIds,
-      createdAt: now,
+      createdAt: existingRecord ? existingRecord.createdAt : now,
       updatedAt: now
     };
 
-    workRecords = [workRecord, ...workRecords];
+    if (existingRecord) {
+      workRecords = workRecords.map((record) => (record.id === workRecord.id ? workRecord : record));
+    } else {
+      workRecords = [workRecord, ...workRecords];
+    }
+
     HatakeData.saveWorkRecords(workRecords);
     clearSelectedPhotos();
     setRoute(`plot/${plotId}`);
   }
 
+  async function deleteWorkRecord(workRecordId) {
+    const record = findWorkRecord(workRecordId);
+
+    if (!record) {
+      alert("削除対象の作業記録が見つかりません。");
+      return;
+    }
+
+    if (!confirm("この作業記録を削除しますか？")) {
+      return;
+    }
+
+    const photoIds = workRecordPhotoIds(record);
+
+    if (photoIds.length) {
+      try {
+        await HatakeData.deletePhotos(photoIds);
+      } catch (error) {
+        console.error("作業記録に紐づく写真の削除に失敗しました。", error);
+        setFlashMessage("写真の削除に失敗したため、作業記録は削除しませんでした。");
+        render();
+        return;
+      }
+    }
+
+    workRecords = workRecords.filter((item) => item.id !== workRecordId);
+    HatakeData.saveWorkRecords(workRecords);
+    setFlashMessage("作業記録を削除しました。");
+    render();
+  }
+
+  async function deletePhoto(photoId) {
+    if (!photoId) {
+      return;
+    }
+
+    if (!confirm("この写真を削除しますか？")) {
+      return;
+    }
+
+    const relatedRecord = workRecords.find((record) => workRecordPhotoIds(record).includes(photoId));
+
+    try {
+      await HatakeData.deletePhotos([photoId]);
+    } catch (error) {
+      console.error("写真の削除に失敗しました。", error);
+      setFlashMessage("写真の削除に失敗しました。");
+      render();
+      return;
+    }
+
+    if (relatedRecord) {
+      const now = new Date().toISOString();
+      workRecords = workRecords.map((record) => {
+        if (record.id !== relatedRecord.id) {
+          return record;
+        }
+
+        return {
+          ...record,
+          photoIds: workRecordPhotoIds(record).filter((id) => id !== photoId),
+          updatedAt: now
+        };
+      });
+      HatakeData.saveWorkRecords(workRecords);
+    }
+
+    setFlashMessage("写真を削除しました。");
+    render();
+  }
+
   function saveScheduleFromForm(form) {
     const formData = new FormData(form);
+    const id = String(formData.get("id") || "");
     const now = new Date().toISOString();
+    const existingSchedule = id ? findSchedule(id) : null;
     const plotId = String(formData.get("plotId") || "");
     const title = String(formData.get("title") || "").trim();
     const date = String(formData.get("date") || "");
+    const done = formData.get("done") === "on";
 
     if (!plotId || !title || !date) {
       alert("区画、作業予定名、予定日を入力してください。");
@@ -959,17 +1130,22 @@
     }
 
     const schedule = {
-      id: HatakeData.createScheduleId(),
+      id: existingSchedule ? existingSchedule.id : HatakeData.createScheduleId(),
       plotId,
       title,
       date,
       memo: String(formData.get("memo") || "").trim(),
-      done: false,
-      createdAt: now,
+      done,
+      createdAt: existingSchedule ? existingSchedule.createdAt : now,
       updatedAt: now
     };
 
-    schedules = [schedule, ...schedules];
+    if (existingSchedule) {
+      schedules = schedules.map((item) => (item.id === schedule.id ? schedule : item));
+    } else {
+      schedules = [schedule, ...schedules];
+    }
+
     HatakeData.saveSchedules(schedules);
     setRoute("schedules");
   }
@@ -999,6 +1175,24 @@
     render();
   }
 
+  function deleteSchedule(scheduleId) {
+    const schedule = findSchedule(scheduleId);
+
+    if (!schedule) {
+      alert("削除対象の予定が見つかりません。");
+      return;
+    }
+
+    if (!confirm("この予定を削除しますか？")) {
+      return;
+    }
+
+    schedules = schedules.filter((item) => item.id !== scheduleId);
+    HatakeData.saveSchedules(schedules);
+    setFlashMessage("予定を削除しました。");
+    render();
+  }
+
   function handleClick(event) {
     const target = event.target.closest("[data-action], [data-nav]");
     if (!target) {
@@ -1024,6 +1218,11 @@
     if (action === "close-photo") closePhotoModal();
     if (action === "open-plot") setRoute(`plot/${target.dataset.id}`);
     if (action === "edit-plot") setRoute(`plot-edit/${target.dataset.id}`);
+    if (action === "edit-work-record") setRoute(`work-edit/${target.dataset.id}`);
+    if (action === "delete-work-record") deleteWorkRecord(target.dataset.id);
+    if (action === "delete-photo") deletePhoto(target.dataset.id);
+    if (action === "edit-schedule") setRoute(`schedule-edit/${target.dataset.id}`);
+    if (action === "delete-schedule") deleteSchedule(target.dataset.id);
     if (action === "cancel-edit") setRoute(`plot/${target.dataset.id}`);
     if (action === "save-plot") {
       const form = target.closest("#plot-form");
@@ -1099,6 +1298,11 @@
       return;
     }
 
+    if (route.startsWith("work-edit/")) {
+      renderWorkRecordForm(route.replace("work-edit/", ""));
+      return;
+    }
+
     if (route === "schedules") {
       renderScheduleList();
       return;
@@ -1106,6 +1310,11 @@
 
     if (route === "schedule-new") {
       renderScheduleForm();
+      return;
+    }
+
+    if (route.startsWith("schedule-edit/")) {
+      renderScheduleForm(route.replace("schedule-edit/", ""));
       return;
     }
 
