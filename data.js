@@ -1,0 +1,278 @@
+(function () {
+  "use strict";
+
+  const STORAGE_KEY = "hatakeNoteLocal.plots.v1";
+  const WORK_RECORDS_STORAGE_KEY = "hatakeNoteLocal.workRecords.v1";
+  const SCHEDULES_STORAGE_KEY = "hatakeNoteLocal.schedules.v1";
+  const PHOTO_DB_NAME = "hatakeNoteLocalDB";
+  const PHOTO_STORE_NAME = "photos";
+
+  const PLOT_STATUSES = ["準備中", "育成中", "収穫中", "終了", "休耕中"];
+  const WORK_TYPES = ["水やり", "草取り", "植え付け", "追肥", "剪定", "支柱", "防虫", "収穫", "片付け", "その他"];
+
+  const SAMPLE_PLOTS = [
+    {
+      id: "plot_sample_a",
+      name: "A区画",
+      cropName: "さつまいも",
+      plantingDate: "2026-05-10",
+      harvestDate: "2026-10-20",
+      status: "育成中",
+      memo: "初期サンプルです。日当たりのよい区画として登録しています。",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    },
+    {
+      id: "plot_sample_b",
+      name: "B区画",
+      cropName: "トマト",
+      plantingDate: "2026-04-25",
+      harvestDate: "2026-07-20",
+      status: "収穫中",
+      memo: "支柱を立てて管理する想定のサンプルです。",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    },
+    {
+      id: "plot_sample_c",
+      name: "C区画",
+      cropName: "ナス",
+      plantingDate: "2026-05-01",
+      harvestDate: "2026-08-10",
+      status: "育成中",
+      memo: "追肥や剪定を記録していく想定のサンプルです。",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    },
+    {
+      id: "plot_sample_flower",
+      name: "花壇",
+      cropName: "日々草",
+      plantingDate: "2026-06-01",
+      harvestDate: "",
+      status: "育成中",
+      memo: "花壇管理用のサンプルです。",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    },
+    {
+      id: "plot_sample_pot",
+      name: "鉢植え",
+      cropName: "ブルーベリー",
+      plantingDate: "2026-03-15",
+      harvestDate: "2026-07-30",
+      status: "育成中",
+      memo: "鉢植え管理用のサンプルです。",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      updatedAt: "2026-07-05T00:00:00.000Z"
+    }
+  ];
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function loadPlots() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+
+    if (!raw) {
+      const samples = clone(SAMPLE_PLOTS);
+      savePlots(samples);
+      return samples;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.error("区画データの読み込みに失敗しました。", error);
+      return [];
+    }
+  }
+
+  function savePlots(plots) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(plots));
+  }
+
+  function loadWorkRecords() {
+    const raw = localStorage.getItem(WORK_RECORDS_STORAGE_KEY);
+
+    if (!raw) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.error("作業記録データの読み込みに失敗しました。", error);
+      return [];
+    }
+  }
+
+  function saveWorkRecords(workRecords) {
+    localStorage.setItem(WORK_RECORDS_STORAGE_KEY, JSON.stringify(workRecords));
+  }
+
+  function loadSchedules() {
+    const raw = localStorage.getItem(SCHEDULES_STORAGE_KEY);
+
+    if (!raw) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.error("育成スケジュールデータの読み込みに失敗しました。", error);
+      return [];
+    }
+  }
+
+  function saveSchedules(schedules) {
+    localStorage.setItem(SCHEDULES_STORAGE_KEY, JSON.stringify(schedules));
+  }
+
+  function createPlotId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `plot_${window.crypto.randomUUID()}`;
+    }
+
+    return `plot_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function createWorkRecordId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `work_${window.crypto.randomUUID()}`;
+    }
+
+    return `work_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function createScheduleId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `schedule_${window.crypto.randomUUID()}`;
+    }
+
+    return `schedule_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function createPhotoId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `photo_${window.crypto.randomUUID()}`;
+    }
+
+    return `photo_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function openPhotoDb() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error("このブラウザではIndexedDBを使用できません。"));
+        return;
+      }
+
+      const request = window.indexedDB.open(PHOTO_DB_NAME, 1);
+
+      request.onupgradeneeded = () => {
+        const db = request.result;
+
+        if (!db.objectStoreNames.contains(PHOTO_STORE_NAME)) {
+          const store = db.createObjectStore(PHOTO_STORE_NAME, { keyPath: "id" });
+          store.createIndex("workRecordId", "workRecordId", { unique: false });
+          store.createIndex("plotId", "plotId", { unique: false });
+          store.createIndex("createdAt", "createdAt", { unique: false });
+        }
+      };
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("IndexedDBの接続に失敗しました。"));
+      request.onblocked = () => reject(new Error("IndexedDBの更新がブロックされました。"));
+    });
+  }
+
+  function savePhotos(photos) {
+    if (!photos.length) {
+      return Promise.resolve();
+    }
+
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+
+      photos.forEach((photo) => store.put(photo));
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error || new Error("写真の保存に失敗しました。"));
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error || new Error("写真の保存が中断されました。"));
+      };
+    }));
+  }
+
+  function getPhoto(photoId) {
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readonly");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+      const request = store.get(photoId);
+
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("写真の読み込みに失敗しました。"));
+      transaction.oncomplete = () => db.close();
+      transaction.onerror = () => db.close();
+    }));
+  }
+
+  function getPhotosByIds(photoIds) {
+    return Promise.all(photoIds.map((photoId) => getPhoto(photoId)))
+      .then((photos) => photos.filter(Boolean));
+  }
+
+  function getPhotosByPlotId(plotId) {
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readonly");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+      const index = store.index("plotId");
+      const request = index.getAll(plotId);
+
+      request.onsuccess = () => {
+        const photos = Array.isArray(request.result) ? request.result : [];
+        resolve(photos.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))));
+      };
+      request.onerror = () => reject(request.error || new Error("写真の読み込みに失敗しました。"));
+      transaction.oncomplete = () => db.close();
+      transaction.onerror = () => db.close();
+    }));
+  }
+
+  window.HatakeData = {
+    STORAGE_KEY,
+    WORK_RECORDS_STORAGE_KEY,
+    SCHEDULES_STORAGE_KEY,
+    PHOTO_DB_NAME,
+    PHOTO_STORE_NAME,
+    PLOT_STATUSES,
+    WORK_TYPES,
+    loadPlots,
+    savePlots,
+    loadWorkRecords,
+    saveWorkRecords,
+    loadSchedules,
+    saveSchedules,
+    createPlotId,
+    createWorkRecordId,
+    createScheduleId,
+    createPhotoId,
+    savePhotos,
+    getPhotosByIds,
+    getPhotosByPlotId
+  };
+})();

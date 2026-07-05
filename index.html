@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>畑ノート ローカル版 Ver.1.0</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <p class="app-kicker">ローカル版 Ver.1.0 試作4</p>
+        <h1>畑ノート</h1>
+      </header>
+
+      <main id="app" class="app-main" aria-live="polite"></main>
+
+      <nav class="bottom-nav" aria-label="画面下部ナビゲーション">
+        <button class="bottom-nav__item" type="button" data-nav="home">
+          <span class="bottom-nav__icon" aria-hidden="true">⌂</span>
+          <span>ホーム</span>
+        </button>
+        <button class="bottom-nav__item" type="button" data-nav="plots">
+          <span class="bottom-nav__icon" aria-hidden="true">□</span>
+          <span>区画</span>
+        </button>
+        <button class="bottom-nav__item" type="button" data-nav="work">
+          <span class="bottom-nav__icon" aria-hidden="true">✎</span>
+          <span>記録</span>
+        </button>
+        <button class="bottom-nav__item" type="button" data-nav="schedules">
+          <span class="bottom-nav__icon" aria-hidden="true">✓</span>
+          <span>予定</span>
+        </button>
+        <button class="bottom-nav__item" type="button" data-nav="new">
+          <span class="bottom-nav__icon" aria-hidden="true">＋</span>
+          <span>追加</span>
+        </button>
+      </nav>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
