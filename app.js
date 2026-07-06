@@ -14,6 +14,8 @@
   let activePhotoUrls = [];
   let flashMessage = "";
   let isLayoutEditMode = false;
+  let pendingBackup = null;
+  let pendingBackupSummary = null;
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -502,6 +504,252 @@
     `;
   }
 
+  function cloneForBackup(value) {
+    return JSON.parse(JSON.stringify(value || []));
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("ファイルの読み込みに失敗しました。"));
+      reader.readAsText(file);
+    });
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("写真データの変換に失敗しました。"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function dataUrlToBlob(dataUrl) {
+    const response = await fetch(dataUrl);
+
+    if (!response.ok) {
+      throw new Error("写真データの読み込みに失敗しました。");
+    }
+
+    return response.blob();
+  }
+
+  function backupFileName(date = new Date()) {
+    const year = String(date.getFullYear());
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const hour = String(date.getHours()).padStart(2, "0");
+    const minute = String(date.getMinutes()).padStart(2, "0");
+
+    return `hatake-note-backup-${year}${month}${day}-${hour}${minute}.json`;
+  }
+
+  async function buildBackupPayload() {
+    const photos = await HatakeData.getAllPhotos();
+    const backupPhotos = await Promise.all(photos.map(async (photo) => ({
+      id: photo.id,
+      workRecordId: photo.workRecordId,
+      plotId: photo.plotId,
+      createdAt: photo.createdAt,
+      mimeType: photo.blob?.type || "image/jpeg",
+      dataUrl: await blobToDataUrl(photo.blob)
+    })));
+
+    return {
+      appName: "hatake-note-local",
+      backupVersion: 1,
+      appVersion: "1.2-prototype1",
+      exportedAt: new Date().toISOString(),
+      data: {
+        plots: cloneForBackup(plots),
+        workRecords: cloneForBackup(workRecords),
+        schedules: cloneForBackup(schedules),
+        layout: cloneForBackup(layout),
+        cropPlans: cloneForBackup(cropPlans)
+      },
+      photos: backupPhotos
+    };
+  }
+
+  function downloadJsonBackup(backup) {
+    const json = JSON.stringify(backup, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = backupFileName();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function ensureBackupArray(value, label) {
+    if (!Array.isArray(value)) {
+      throw new Error(`${label} の形式が正しくありません。`);
+    }
+
+    return value;
+  }
+
+  function validateBackupPayload(value) {
+    if (!value || typeof value !== "object" || value.appName !== "hatake-note-local") {
+      throw new Error("畑ノートのバックアップファイルではありません。");
+    }
+
+    if (!value.data || typeof value.data !== "object") {
+      throw new Error("バックアップ内のデータが見つかりません。");
+    }
+
+    const data = {
+      plots: ensureBackupArray(value.data.plots, "区画データ"),
+      workRecords: ensureBackupArray(value.data.workRecords, "作業記録"),
+      schedules: ensureBackupArray(value.data.schedules, "育成スケジュール"),
+      layout: ensureBackupArray(value.data.layout, "畑レイアウト"),
+      cropPlans: ensureBackupArray(value.data.cropPlans, "栽培計画")
+    };
+    const photos = value.photos == null ? [] : ensureBackupArray(value.photos, "写真データ");
+
+    return {
+      appName: value.appName,
+      backupVersion: Number(value.backupVersion || 1),
+      appVersion: String(value.appVersion || ""),
+      exportedAt: String(value.exportedAt || ""),
+      data,
+      photos
+    };
+  }
+
+  function backupSummary(backup) {
+    return {
+      plots: backup.data.plots.length,
+      workRecords: backup.data.workRecords.length,
+      schedules: backup.data.schedules.length,
+      layout: backup.data.layout.length,
+      cropPlans: backup.data.cropPlans.length,
+      photos: backup.photos.length
+    };
+  }
+
+  function backupSummaryHtml(summary) {
+    if (!summary) {
+      return "";
+    }
+
+    return `
+      <div class="panel backup-summary">
+        <h3>読み込み内容</h3>
+        <ul>
+          <li>区画：${escapeHtml(summary.plots)}件</li>
+          <li>作業記録：${escapeHtml(summary.workRecords)}件</li>
+          <li>育成スケジュール：${escapeHtml(summary.schedules)}件</li>
+          <li>畑レイアウト：${escapeHtml(summary.layout)}マス</li>
+          <li>栽培計画：${escapeHtml(summary.cropPlans)}件</li>
+          <li>写真：${escapeHtml(summary.photos)}枚</li>
+        </ul>
+        <button class="btn btn--danger" type="button" data-action="restore-backup">この内容で上書き復元する</button>
+      </div>
+    `;
+  }
+
+  async function backupPhotoToRecord(photo) {
+    if (!photo || !photo.id || !photo.workRecordId || !photo.plotId) {
+      throw new Error("写真データの形式が正しくありません。");
+    }
+
+    const mimeType = String(photo.mimeType || "image/jpeg");
+    const dataUrl = photo.dataUrl || (photo.base64 ? `data:${mimeType};base64,${photo.base64}` : "");
+
+    if (!dataUrl) {
+      throw new Error("写真データが見つかりません。");
+    }
+
+    return {
+      id: String(photo.id),
+      workRecordId: String(photo.workRecordId),
+      plotId: String(photo.plotId),
+      blob: await dataUrlToBlob(dataUrl),
+      createdAt: String(photo.createdAt || new Date().toISOString())
+    };
+  }
+
+  async function exportBackup() {
+    try {
+      const backup = await buildBackupPayload();
+      downloadJsonBackup(backup);
+      setFlashMessage("バックアップを書き出しました。");
+    } catch (error) {
+      console.error("バックアップの書き出しに失敗しました。", error);
+      setFlashMessage("バックアップの書き出しに失敗しました。IndexedDBの写真データを読み込めない可能性があります。");
+    }
+
+    renderBackup();
+  }
+
+  async function prepareBackupRestore(file) {
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await readFileAsText(file);
+      const parsed = JSON.parse(text);
+      pendingBackup = validateBackupPayload(parsed);
+      pendingBackupSummary = backupSummary(pendingBackup);
+      setFlashMessage("バックアップファイルを読み込みました。件数を確認してください。");
+    } catch (error) {
+      console.error("バックアップファイルの読み込みに失敗しました。", error);
+      pendingBackup = null;
+      pendingBackupSummary = null;
+      setFlashMessage(error.message || "畑ノートのバックアップファイルではありません。");
+    }
+
+    renderBackup();
+  }
+
+  async function restoreBackup() {
+    if (!pendingBackup) {
+      setFlashMessage("復元するバックアップファイルを先に選択してください。");
+      renderBackup();
+      return;
+    }
+
+    if (!confirm("現在のデータをバックアップファイルの内容で上書き復元します。よろしいですか？")) {
+      return;
+    }
+
+    try {
+      const restoredPhotos = await Promise.all(pendingBackup.photos.map(backupPhotoToRecord));
+
+      await HatakeData.replacePhotos(restoredPhotos);
+      HatakeData.savePlots(pendingBackup.data.plots);
+      HatakeData.saveWorkRecords(pendingBackup.data.workRecords);
+      HatakeData.saveSchedules(pendingBackup.data.schedules);
+      HatakeData.saveLayout(pendingBackup.data.layout);
+      HatakeData.saveCropPlans(pendingBackup.data.cropPlans);
+
+      plots = HatakeData.loadPlots();
+      workRecords = HatakeData.loadWorkRecords();
+      schedules = HatakeData.loadSchedules();
+      layout = HatakeData.loadLayout(plots);
+      cropPlans = HatakeData.loadCropPlans();
+      pendingBackup = null;
+      pendingBackupSummary = null;
+      setFlashMessage("復元が完了しました。");
+      setRoute("home");
+      render();
+    } catch (error) {
+      console.error("バックアップの復元に失敗しました。", error);
+      setFlashMessage("復元に失敗しました。バックアップファイルの写真データまたはIndexedDBを確認してください。");
+      renderBackup();
+    }
+  }
+
   async function hydratePhotoStrips() {
     const strips = Array.from(app.querySelectorAll("[data-photo-ids]"));
 
@@ -654,6 +902,7 @@
             <button class="btn" type="button" data-action="go-work-new">作業記録を追加する</button>
             <button class="btn" type="button" data-action="go-schedule-new">予定を追加する</button>
             <button class="btn" type="button" data-action="go-crop-plans">栽培計画を見る</button>
+            <button class="btn" type="button" data-action="go-backup">バックアップ</button>
             <button class="btn btn--subtle" type="button" data-action="go-new">区画を追加する</button>
           </div>
         </div>
@@ -1319,6 +1568,47 @@
     }
   }
 
+  function renderBackup() {
+    app.innerHTML = `
+      <section class="view">
+        ${flashMessageHtml()}
+        <div class="detail-header">
+          <div>
+            <h2>バックアップ</h2>
+            <p class="empty-text">端末変更やブラウザデータ削除に備えて、畑ノートのデータをJSONファイルで保存できます。</p>
+          </div>
+        </div>
+
+        <section class="section" aria-labelledby="backup-export-title">
+          <div class="panel">
+            <h3 id="backup-export-title">バックアップを書き出す</h3>
+            <p class="memo-text">区画、作業記録、育成スケジュール、畑レイアウト、栽培計画、写真をまとめてJSONファイルに出力します。</p>
+            <button class="btn btn--primary" type="button" data-action="export-backup">バックアップを書き出す</button>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="backup-import-title">
+          <div class="panel">
+            <h3 id="backup-import-title">バックアップを読み込む</h3>
+            <p class="memo-text">JSONファイルを選択すると、復元前に件数を確認できます。復元は現在のデータを上書きします。</p>
+            <div class="field">
+              <label for="backup-file">バックアップJSON</label>
+              <input id="backup-file" name="backupFile" type="file" accept="application/json,.json">
+            </div>
+          </div>
+          ${backupSummaryHtml(pendingBackupSummary)}
+        </section>
+
+        <section class="section" aria-labelledby="backup-note-title">
+          <div class="panel panel--empty">
+            <h3 id="backup-note-title">注意点</h3>
+            <p class="memo-text">復元は上書き復元です。現在の端末・ブラウザ内のデータと写真は、バックアップファイルの内容に置き換わります。</p>
+          </div>
+        </section>
+      </section>
+    `;
+  }
+
   function savePlotFromForm(form) {
     const formData = new FormData(form);
     const id = String(formData.get("id") || "");
@@ -1678,6 +1968,7 @@
     if (action === "go-schedule-new") setRoute("schedule-new");
     if (action === "go-crop-plans") setRoute("crop-plans");
     if (action === "go-crop-plan-new") setRoute("crop-plan-new");
+    if (action === "go-backup") setRoute("backup");
     if (action === "toggle-layout-edit") {
       isLayoutEditMode = !isLayoutEditMode;
       render();
@@ -1693,6 +1984,8 @@
     if (action === "delete-schedule") deleteSchedule(target.dataset.id);
     if (action === "edit-crop-plan") setRoute(`crop-plan-edit/${target.dataset.id}`);
     if (action === "delete-crop-plan") deleteCropPlan(target.dataset.id);
+    if (action === "export-backup") exportBackup();
+    if (action === "restore-backup") restoreBackup();
     if (action === "cancel-edit") setRoute(`plot/${target.dataset.id}`);
     if (action === "save-plot") {
       const form = target.closest("#plot-form");
@@ -1757,6 +2050,10 @@
     if (target.matches("[data-layout-cell-id]")) {
       updateLayoutCell(target.dataset.layoutCellId, target.value);
     }
+
+    if (target.matches("#backup-file")) {
+      prepareBackupRestore(target.files && target.files[0]);
+    }
   }
 
   function render() {
@@ -1800,6 +2097,11 @@
 
     if (route === "crop-plans") {
       renderCropPlanList();
+      return;
+    }
+
+    if (route === "backup") {
+      renderBackup();
       return;
     }
 

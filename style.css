@@ -484,6 +484,18 @@ h3 {
   background: #e7e7e2;
 }
 
+.backup-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.backup-summary ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 1.2em;
+}
+
 .schedule-card.is-done {
   color: var(--muted);
   background: #f2f1eb;

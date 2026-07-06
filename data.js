@@ -354,6 +354,22 @@
     }));
   }
 
+  function getAllPhotos() {
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readonly");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        const photos = Array.isArray(request.result) ? request.result : [];
+        resolve(photos.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))));
+      };
+      request.onerror = () => reject(request.error || new Error("写真の読み込みに失敗しました。"));
+      transaction.oncomplete = () => db.close();
+      transaction.onerror = () => db.close();
+    }));
+  }
+
   function deletePhotos(photoIds) {
     const ids = Array.isArray(photoIds) ? photoIds.filter(Boolean) : [];
 
@@ -420,6 +436,31 @@
     }));
   }
 
+  function replacePhotos(photos) {
+    const items = Array.isArray(photos) ? photos : [];
+
+    return openPhotoDb().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(PHOTO_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(PHOTO_STORE_NAME);
+
+      store.clear();
+      items.forEach((photo) => store.put(photo));
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error || new Error("写真の復元に失敗しました。"));
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error || new Error("写真の復元が中断されました。"));
+      };
+    }));
+  }
+
   window.HatakeData = {
     STORAGE_KEY,
     WORK_RECORDS_STORAGE_KEY,
@@ -449,7 +490,9 @@
     savePhotos,
     getPhotosByIds,
     getPhotosByPlotId,
+    getAllPhotos,
     deletePhotos,
-    updatePhotosPlot
+    updatePhotosPlot,
+    replacePhotos
   };
 })();
