@@ -7,10 +7,13 @@
   let plots = HatakeData.loadPlots();
   let workRecords = HatakeData.loadWorkRecords();
   let schedules = HatakeData.loadSchedules();
+  let layout = HatakeData.loadLayout(plots);
+  let cropPlans = HatakeData.loadCropPlans();
   let selectedPhotoFiles = [];
   let selectedPhotoPreviewUrls = [];
   let activePhotoUrls = [];
   let flashMessage = "";
+  let isLayoutEditMode = false;
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -75,6 +78,10 @@
     return schedules.find((schedule) => schedule.id === scheduleId);
   }
 
+  function findCropPlan(cropPlanId) {
+    return cropPlans.find((plan) => plan.id === cropPlanId);
+  }
+
   function releasePhotoObjectUrls() {
     activePhotoUrls.forEach((url) => URL.revokeObjectURL(url));
     activePhotoUrls = [];
@@ -123,6 +130,84 @@
 
   function findPlot(plotId) {
     return plots.find((plot) => plot.id === plotId);
+  }
+
+  function layoutToneClass(plotId) {
+    const plotIndex = plots.findIndex((plot) => plot.id === plotId);
+
+    if (plotIndex < 0) {
+      return "";
+    }
+
+    return `layout-cell--tone-${(plotIndex % 6) + 1}`;
+  }
+
+  function layoutPlotOptions(selectedPlotId) {
+    const options = [
+      `<option value="" ${selectedPlotId ? "" : "selected"}>空き</option>`
+    ];
+
+    plots.forEach((plot) => {
+      const selected = plot.id === selectedPlotId ? "selected" : "";
+      const label = `${plot.name}：${plot.cropName || "作物未設定"}`;
+      options.push(`<option value="${escapeHtml(plot.id)}" ${selected}>${escapeHtml(label)}</option>`);
+    });
+
+    return options.join("");
+  }
+
+  function layoutCellHtml(cell, index) {
+    const plot = findPlot(cell.plotId);
+    const cellNumber = index + 1;
+    const toneClass = plot ? layoutToneClass(plot.id) : "";
+    const cellClasses = [
+      "layout-cell",
+      toneClass,
+      plot ? "is-assigned" : "is-empty",
+      isLayoutEditMode ? "is-editing" : ""
+    ].filter(Boolean).join(" ");
+
+    if (isLayoutEditMode) {
+      const selectId = `layout-${cell.cellId}`;
+      return `
+        <div class="${cellClasses}">
+          <span class="layout-cell__number">${cellNumber}</span>
+          <select id="${escapeHtml(selectId)}" class="layout-select" data-layout-cell-id="${escapeHtml(cell.cellId)}" aria-label="${cellNumber}番のマス">
+            ${layoutPlotOptions(plot ? plot.id : "")}
+          </select>
+        </div>
+      `;
+    }
+
+    return `
+      <button class="${cellClasses}" type="button" ${plot ? `data-action="open-plot" data-id="${escapeHtml(plot.id)}"` : "disabled"}>
+        <span class="layout-cell__number">${cellNumber}</span>
+        <span class="layout-cell__name">${plot ? escapeHtml(plot.name) : "空き"}</span>
+        <span class="layout-cell__crop">${plot ? escapeHtml(plot.cropName || "作物未設定") : "未配置"}</span>
+      </button>
+    `;
+  }
+
+  function layoutGridHtml() {
+    const statusText = isLayoutEditMode
+      ? "編集モードです。各マスで区画または空きを選べます。"
+      : "割り当て済みのマスをタップすると区画詳細を開きます。";
+
+    return `
+      <section class="section" aria-labelledby="home-layout-title">
+        <div class="layout-header">
+          <div>
+            <h2 id="home-layout-title">畑レイアウト</h2>
+            <p class="empty-text">4×4グリッドで区画の配置を確認できます。</p>
+          </div>
+          <button class="btn btn--compact" type="button" data-action="toggle-layout-edit">${isLayoutEditMode ? "編集を終了" : "レイアウト編集"}</button>
+        </div>
+        <p class="layout-status">${escapeHtml(statusText)}</p>
+        <div class="layout-grid" aria-label="畑レイアウト 4×4">
+          ${layout.map((cell, index) => layoutCellHtml(cell, index)).join("")}
+        </div>
+      </section>
+    `;
   }
 
   function sortWorkRecordsByDate(records) {
@@ -254,6 +339,167 @@
     }
 
     return `<div class="schedule-list">${items.map((schedule) => scheduleCardHtml(schedule, options)).join("")}</div>`;
+  }
+
+  function dateValueToDate(value) {
+    if (!value) {
+      return null;
+    }
+
+    const date = new Date(`${value}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function addMonths(date, months) {
+    return new Date(date.getFullYear(), date.getMonth() + months, 1);
+  }
+
+  function monthEndDate(date) {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  }
+
+  function timelineMonths() {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    return Array.from({ length: 12 }, (_, index) => addMonths(start, index));
+  }
+
+  function formatMonthLabel(date) {
+    return `${date.getFullYear()}年${date.getMonth() + 1}月`;
+  }
+
+  function cropPlanOverlapsMonth(plan, monthDate) {
+    const startDate = dateValueToDate(plan.startDate);
+    const endDate = dateValueToDate(plan.endDate) || startDate;
+
+    if (!startDate || !endDate) {
+      return false;
+    }
+
+    const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+    const monthEnd = monthEndDate(monthDate);
+
+    return startDate <= monthEnd && endDate >= monthStart;
+  }
+
+  function sortCropPlansForList(items) {
+    return [...items].sort((a, b) => {
+      const dateCompare = String(a.startDate || "9999-99-99").localeCompare(String(b.startDate || "9999-99-99"));
+
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+
+      const plotA = findPlot(a.plotId);
+      const plotB = findPlot(b.plotId);
+      return String(plotA?.name || "").localeCompare(String(plotB?.name || ""), "ja");
+    });
+  }
+
+  function upcomingCropPlans() {
+    const today = todayValue();
+    return sortCropPlansForList(cropPlans.filter((plan) => String(plan.startDate || "") >= today));
+  }
+
+  function cropPlanStatusOptions(selectedStatus) {
+    return HatakeData.CROP_PLAN_STATUSES.map((status) => {
+      const selected = status === selectedStatus ? "selected" : "";
+      return `<option value="${escapeHtml(status)}" ${selected}>${escapeHtml(status)}</option>`;
+    }).join("");
+  }
+
+  function cropPlanCardHtml(plan, options = {}) {
+    const plot = findPlot(plan.plotId);
+    const plotName = plot ? plot.name : "削除済みの区画";
+    const showActions = options.showActions !== false;
+    const planId = escapeHtml(plan.id);
+
+    return `
+      <article class="card crop-plan-card">
+        <div class="crop-plan-card__top">
+          <div>
+            <p class="crop-plan-plot">${escapeHtml(plotName)}</p>
+            <p class="crop-plan-title">${escapeHtml(plan.cropName || "作物未設定")}</p>
+          </div>
+          <span class="status-badge" data-plan-status="${escapeHtml(plan.status)}">${escapeHtml(plan.status)}</span>
+        </div>
+        <div class="meta-grid">
+          <div class="meta-item">
+            <span class="meta-label">開始日</span>
+            <span class="meta-value">${escapeHtml(formatDate(plan.startDate))}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">終了予定日</span>
+            <span class="meta-value">${escapeHtml(formatDate(plan.endDate))}</span>
+          </div>
+        </div>
+        <p class="crop-plan-memo">${escapeHtml(plan.memo || "メモはありません。")}</p>
+        ${
+          showActions
+            ? `
+              <div class="card-actions">
+                <button class="btn btn--compact" type="button" data-action="edit-crop-plan" data-id="${planId}">編集</button>
+                <button class="btn btn--compact btn--danger" type="button" data-action="delete-crop-plan" data-id="${planId}">削除</button>
+              </div>
+            `
+            : ""
+        }
+      </article>
+    `;
+  }
+
+  function cropPlanListHtml(items, emptyMessage, options = {}) {
+    if (!items.length) {
+      return `
+        <div class="panel panel--empty">
+          <p class="empty-text">${escapeHtml(emptyMessage)}</p>
+        </div>
+      `;
+    }
+
+    return `<div class="crop-plan-list">${items.map((plan) => cropPlanCardHtml(plan, options)).join("")}</div>`;
+  }
+
+  function cropTimelineHtml() {
+    if (!plots.length) {
+      return `
+        <div class="panel panel--empty">
+          <p class="empty-text">タイムラインを表示するには、先に区画を追加してください。</p>
+        </div>
+      `;
+    }
+
+    const months = timelineMonths();
+    const sortedPlans = sortCropPlansForList(cropPlans);
+
+    return `
+      <div class="timeline-scroll" role="region" aria-label="栽培計画 月別タイムライン" tabindex="0">
+        <div class="crop-timeline" aria-label="今月から12か月分の栽培計画">
+          <div class="timeline-cell timeline-cell--head timeline-cell--plot">区画</div>
+          ${months.map((month) => `<div class="timeline-cell timeline-cell--head">${escapeHtml(formatMonthLabel(month))}</div>`).join("")}
+          ${plots.map((plot) => `
+            <div class="timeline-cell timeline-cell--plot">
+              <span class="timeline-plot-name">${escapeHtml(plot.name)}</span>
+              <span class="timeline-plot-crop">${escapeHtml(plot.cropName || "作物未設定")}</span>
+            </div>
+            ${months.map((month) => {
+              const plansInMonth = sortedPlans.filter((plan) => plan.plotId === plot.id && cropPlanOverlapsMonth(plan, month));
+
+              if (!plansInMonth.length) {
+                return `<div class="timeline-cell timeline-cell--empty">空き</div>`;
+              }
+
+              return `
+                <div class="timeline-cell">
+                  ${plansInMonth.map((plan) => `<span class="timeline-crop" data-plan-status="${escapeHtml(plan.status)}">${escapeHtml(plan.cropName)}</span>`).join("")}
+                </div>
+              `;
+            }).join("")}
+          `).join("")}
+        </div>
+      </div>
+    `;
   }
 
   async function hydratePhotoStrips() {
@@ -395,6 +641,7 @@
     const recentPlots = plots.slice(0, 3);
     const recentWorkRecords = sortWorkRecordsByDate(workRecords).slice(0, 5);
     const upcomingSchedules = sortUpcomingSchedules(schedules).slice(0, 5);
+    const upcomingPlans = upcomingCropPlans().slice(0, 3);
 
     app.innerHTML = `
       <section class="view">
@@ -406,9 +653,20 @@
             <button class="btn btn--primary" type="button" data-action="go-plots">区画一覧を見る</button>
             <button class="btn" type="button" data-action="go-work-new">作業記録を追加する</button>
             <button class="btn" type="button" data-action="go-schedule-new">予定を追加する</button>
+            <button class="btn" type="button" data-action="go-crop-plans">栽培計画を見る</button>
             <button class="btn btn--subtle" type="button" data-action="go-new">区画を追加する</button>
           </div>
         </div>
+
+        ${layoutGridHtml()}
+
+        <section class="section" aria-labelledby="home-crop-plan-title">
+          <div class="section-header">
+            <h2 id="home-crop-plan-title">今後の栽培計画</h2>
+            <button class="btn btn--compact" type="button" data-action="go-crop-plan-new">計画を追加</button>
+          </div>
+          ${cropPlanListHtml(upcomingPlans, "今日以降に開始する栽培計画はまだありません。", { showActions: false })}
+        </section>
 
         <section class="section" aria-labelledby="home-plots-title">
           <h2 id="home-plots-title">登録中の区画</h2>
@@ -850,7 +1108,10 @@
             <p class="empty-text">${schedules.length}件の予定があります。</p>
           </div>
         </div>
-        <button class="btn btn--primary" type="button" data-action="go-schedule-new">予定を追加する</button>
+        <div class="button-row">
+          <button class="btn btn--primary" type="button" data-action="go-schedule-new">予定を追加する</button>
+          <button class="btn" type="button" data-action="go-crop-plans">栽培計画を見る</button>
+        </div>
         ${scheduleListHtml(sortedSchedules, "まだ予定がありません。予定を追加するとここに表示されます。")}
       </section>
     `;
@@ -938,6 +1199,126 @@
     }
   }
 
+  function renderCropPlanList() {
+    const sortedPlans = sortCropPlansForList(cropPlans);
+
+    app.innerHTML = `
+      <section class="view">
+        ${flashMessageHtml()}
+        <div class="detail-header">
+          <div>
+            <h2>栽培計画</h2>
+            <p class="empty-text">区画ごとの作付け予定を月別に確認できます。</p>
+          </div>
+        </div>
+        <div class="button-row">
+          <button class="btn btn--primary" type="button" data-action="go-crop-plan-new">栽培計画を追加する</button>
+          <button class="btn" type="button" data-action="go-home">ホームへ戻る</button>
+        </div>
+
+        <section class="section" aria-labelledby="crop-timeline-title">
+          <h2 id="crop-timeline-title">月別タイムライン</h2>
+          <p class="empty-text">今月から12か月分を横スクロールで表示します。</p>
+          ${cropTimelineHtml()}
+        </section>
+
+        <section class="section" aria-labelledby="crop-plan-list-title">
+          <h2 id="crop-plan-list-title">栽培計画一覧</h2>
+          ${cropPlanListHtml(sortedPlans, "まだ栽培計画がありません。追加するとここに表示されます。")}
+        </section>
+      </section>
+    `;
+  }
+
+  function renderCropPlanForm(cropPlanId) {
+    const isEdit = Boolean(cropPlanId);
+    const plan = isEdit ? findCropPlan(cropPlanId) : null;
+
+    if (isEdit && !plan) {
+      app.innerHTML = `
+        <section class="view">
+          <div class="panel panel--empty">
+            <h2>栽培計画が見つかりません</h2>
+            <p class="empty-text">保存済みデータから対象の栽培計画を見つけられませんでした。</p>
+          </div>
+          <button class="btn btn--primary" type="button" data-action="go-crop-plans">栽培計画へ戻る</button>
+        </section>
+      `;
+      return;
+    }
+
+    if (!plots.length) {
+      app.innerHTML = `
+        <section class="view">
+          <div class="panel panel--empty">
+            <h2>栽培計画を追加</h2>
+            <p class="empty-text">栽培計画は区画に紐づけて保存します。先に区画を追加してください。</p>
+          </div>
+          <button class="btn btn--primary" type="button" data-action="go-new">区画を追加する</button>
+        </section>
+      `;
+      return;
+    }
+
+    app.innerHTML = `
+      <section class="view">
+        <div>
+          <h2>${isEdit ? "栽培計画を編集" : "栽培計画を追加"}</h2>
+          <p class="empty-text">作付けや次に育てる作物の予定を、育成スケジュールとは別に登録します。</p>
+        </div>
+
+        <form class="form" id="crop-plan-form" novalidate>
+          <input type="hidden" name="id" value="${escapeHtml(plan ? plan.id : "")}">
+
+          <div class="field">
+            <label for="crop-plan-plot">区画</label>
+            <select id="crop-plan-plot" name="plotId" required>
+              ${plotOptions(plan ? plan.plotId : plots[0].id)}
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="crop-plan-crop">作物名</label>
+            <input id="crop-plan-crop" name="cropName" type="text" required maxlength="60" autocomplete="off" placeholder="例：じゃがいも" value="${escapeHtml(plan ? plan.cropName : "")}">
+          </div>
+
+          <div class="field">
+            <label for="crop-plan-start">開始日</label>
+            <input id="crop-plan-start" name="startDate" type="date" required value="${escapeHtml(plan ? plan.startDate : todayValue())}">
+          </div>
+
+          <div class="field">
+            <label for="crop-plan-end">終了予定日</label>
+            <input id="crop-plan-end" name="endDate" type="date" required value="${escapeHtml(plan ? plan.endDate : todayValue())}">
+          </div>
+
+          <div class="field">
+            <label for="crop-plan-status">状態</label>
+            <select id="crop-plan-status" name="status">
+              ${cropPlanStatusOptions(plan ? plan.status : "予定")}
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="crop-plan-memo">メモ</label>
+            <textarea id="crop-plan-memo" name="memo" maxlength="500" placeholder="植え付け予定、連作の注意、片付け予定など">${escapeHtml(plan ? plan.memo : "")}</textarea>
+            <p class="form-help">500文字まで保存できます。</p>
+          </div>
+
+          <div class="button-row">
+            <button class="btn btn--primary" type="button" data-action="save-crop-plan">保存する</button>
+            <button class="btn" type="button" data-action="go-crop-plans">キャンセル</button>
+          </div>
+        </form>
+      </section>
+    `;
+
+    const firstInput = app.querySelector("#crop-plan-crop");
+    if (firstInput) {
+      firstInput.focus();
+    }
+  }
+
   function savePlotFromForm(form) {
     const formData = new FormData(form);
     const id = String(formData.get("id") || "");
@@ -972,6 +1353,22 @@
 
     HatakeData.savePlots(plots);
     setRoute(`plot/${plot.id}`);
+  }
+
+  function updateLayoutCell(cellId, plotId) {
+    layout = layout.map((cell) => {
+      if (cell.cellId !== cellId) {
+        return cell;
+      }
+
+      return {
+        ...cell,
+        plotId: plotId || null
+      };
+    });
+
+    HatakeData.saveLayout(layout);
+    render();
   }
 
   async function saveWorkRecordFromForm(form) {
@@ -1193,6 +1590,71 @@
     render();
   }
 
+  function saveCropPlanFromForm(form) {
+    const formData = new FormData(form);
+    const id = String(formData.get("id") || "");
+    const now = new Date().toISOString();
+    const existingPlan = id ? findCropPlan(id) : null;
+    const plotId = String(formData.get("plotId") || "");
+    const cropName = String(formData.get("cropName") || "").trim();
+    const startDate = String(formData.get("startDate") || "");
+    const endDate = String(formData.get("endDate") || "");
+
+    if (!plotId || !cropName || !startDate || !endDate) {
+      alert("区画、作物名、開始日、終了予定日を入力してください。");
+      return;
+    }
+
+    if (!findPlot(plotId)) {
+      alert("選択した区画が見つかりません。区画一覧を確認してください。");
+      return;
+    }
+
+    if (endDate < startDate) {
+      alert("終了予定日は開始日以降の日付にしてください。");
+      return;
+    }
+
+    const cropPlan = {
+      id: existingPlan ? existingPlan.id : HatakeData.createCropPlanId(),
+      plotId,
+      cropName,
+      startDate,
+      endDate,
+      memo: String(formData.get("memo") || "").trim(),
+      status: String(formData.get("status") || "予定"),
+      createdAt: existingPlan ? existingPlan.createdAt : now,
+      updatedAt: now
+    };
+
+    if (existingPlan) {
+      cropPlans = cropPlans.map((plan) => (plan.id === cropPlan.id ? cropPlan : plan));
+    } else {
+      cropPlans = [cropPlan, ...cropPlans];
+    }
+
+    HatakeData.saveCropPlans(cropPlans);
+    setRoute("crop-plans");
+  }
+
+  function deleteCropPlan(cropPlanId) {
+    const plan = findCropPlan(cropPlanId);
+
+    if (!plan) {
+      alert("削除対象の栽培計画が見つかりません。");
+      return;
+    }
+
+    if (!confirm("この栽培計画を削除しますか？")) {
+      return;
+    }
+
+    cropPlans = cropPlans.filter((item) => item.id !== cropPlanId);
+    HatakeData.saveCropPlans(cropPlans);
+    setFlashMessage("栽培計画を削除しました。");
+    render();
+  }
+
   function handleClick(event) {
     const target = event.target.closest("[data-action], [data-nav]");
     if (!target) {
@@ -1214,6 +1676,12 @@
     if (action === "go-new") setRoute("plot-new");
     if (action === "go-work-new") setRoute("work-new");
     if (action === "go-schedule-new") setRoute("schedule-new");
+    if (action === "go-crop-plans") setRoute("crop-plans");
+    if (action === "go-crop-plan-new") setRoute("crop-plan-new");
+    if (action === "toggle-layout-edit") {
+      isLayoutEditMode = !isLayoutEditMode;
+      render();
+    }
     if (action === "open-photo") openPhotoModal(target.dataset.photoUrl);
     if (action === "close-photo") closePhotoModal();
     if (action === "open-plot") setRoute(`plot/${target.dataset.id}`);
@@ -1223,6 +1691,8 @@
     if (action === "delete-photo") deletePhoto(target.dataset.id);
     if (action === "edit-schedule") setRoute(`schedule-edit/${target.dataset.id}`);
     if (action === "delete-schedule") deleteSchedule(target.dataset.id);
+    if (action === "edit-crop-plan") setRoute(`crop-plan-edit/${target.dataset.id}`);
+    if (action === "delete-crop-plan") deleteCropPlan(target.dataset.id);
     if (action === "cancel-edit") setRoute(`plot/${target.dataset.id}`);
     if (action === "save-plot") {
       const form = target.closest("#plot-form");
@@ -1242,6 +1712,12 @@
         saveScheduleFromForm(form);
       }
     }
+    if (action === "save-crop-plan") {
+      const form = target.closest("#crop-plan-form");
+      if (form) {
+        saveCropPlanFromForm(form);
+      }
+    }
   }
 
   function handleSubmit(event) {
@@ -1259,6 +1735,11 @@
       event.preventDefault();
       saveScheduleFromForm(event.target);
     }
+
+    if (event.target.id === "crop-plan-form") {
+      event.preventDefault();
+      saveCropPlanFromForm(event.target);
+    }
   }
 
   function handleChange(event) {
@@ -1272,10 +1753,19 @@
     if (target.matches('[data-action="toggle-schedule-done"]')) {
       updateScheduleDone(target.dataset.id, target.checked);
     }
+
+    if (target.matches("[data-layout-cell-id]")) {
+      updateLayoutCell(target.dataset.layoutCellId, target.value);
+    }
   }
 
   function render() {
     const route = getRoute();
+
+    if (route !== "home") {
+      isLayoutEditMode = false;
+    }
+
     setActiveNav(route);
 
     if (route === "home") {
@@ -1305,6 +1795,21 @@
 
     if (route === "schedules") {
       renderScheduleList();
+      return;
+    }
+
+    if (route === "crop-plans") {
+      renderCropPlanList();
+      return;
+    }
+
+    if (route === "crop-plan-new") {
+      renderCropPlanForm();
+      return;
+    }
+
+    if (route.startsWith("crop-plan-edit/")) {
+      renderCropPlanForm(route.replace("crop-plan-edit/", ""));
       return;
     }
 

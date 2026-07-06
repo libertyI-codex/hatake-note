@@ -4,11 +4,15 @@
   const STORAGE_KEY = "hatakeNoteLocal.plots.v1";
   const WORK_RECORDS_STORAGE_KEY = "hatakeNoteLocal.workRecords.v1";
   const SCHEDULES_STORAGE_KEY = "hatakeNoteLocal.schedules.v1";
+  const LAYOUT_STORAGE_KEY = "hatakeNoteLocal.layout.v1";
+  const CROP_PLANS_STORAGE_KEY = "hatakeNoteLocal.cropPlans.v1";
+  const LAYOUT_CELL_COUNT = 16;
   const PHOTO_DB_NAME = "hatakeNoteLocalDB";
   const PHOTO_STORE_NAME = "photos";
 
   const PLOT_STATUSES = ["準備中", "育成中", "収穫中", "終了", "休耕中"];
   const WORK_TYPES = ["水やり", "草取り", "植え付け", "追肥", "剪定", "支柱", "防虫", "収穫", "片付け", "その他"];
+  const CROP_PLAN_STATUSES = ["予定", "栽培中", "完了"];
 
   const SAMPLE_PLOTS = [
     {
@@ -134,6 +138,95 @@
     localStorage.setItem(SCHEDULES_STORAGE_KEY, JSON.stringify(schedules));
   }
 
+  function normalizeCropPlan(plan) {
+    const status = CROP_PLAN_STATUSES.includes(plan?.status) ? plan.status : "予定";
+
+    return {
+      id: String(plan?.id || ""),
+      plotId: String(plan?.plotId || ""),
+      cropName: String(plan?.cropName || ""),
+      startDate: String(plan?.startDate || ""),
+      endDate: String(plan?.endDate || ""),
+      memo: String(plan?.memo || ""),
+      status,
+      createdAt: String(plan?.createdAt || ""),
+      updatedAt: String(plan?.updatedAt || "")
+    };
+  }
+
+  function loadCropPlans() {
+    const raw = localStorage.getItem(CROP_PLANS_STORAGE_KEY);
+
+    if (!raw) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.map(normalizeCropPlan).filter((plan) => plan.id && plan.plotId && plan.cropName)
+        : [];
+    } catch (error) {
+      console.error("栽培計画データの読み込みに失敗しました。", error);
+      return [];
+    }
+  }
+
+  function saveCropPlans(cropPlans) {
+    localStorage.setItem(CROP_PLANS_STORAGE_KEY, JSON.stringify(cropPlans.map(normalizeCropPlan)));
+  }
+
+  function createLayoutCells(plotIds = []) {
+    return Array.from({ length: LAYOUT_CELL_COUNT }, (_, index) => ({
+      cellId: `cell-${index + 1}`,
+      plotId: plotIds[index] || null
+    }));
+  }
+
+  function normalizeLayout(layout) {
+    return Array.from({ length: LAYOUT_CELL_COUNT }, (_, index) => {
+      const cellId = `cell-${index + 1}`;
+      const sourceCell = Array.isArray(layout)
+        ? layout.find((cell) => cell && cell.cellId === cellId) || layout[index]
+        : null;
+      const plotId = typeof sourceCell?.plotId === "string" && sourceCell.plotId
+        ? sourceCell.plotId
+        : null;
+
+      return { cellId, plotId };
+    });
+  }
+
+  function createInitialLayout(plots = []) {
+    const plotIds = Array.isArray(plots)
+      ? plots.map((plot) => plot.id).filter(Boolean)
+      : [];
+
+    return createLayoutCells(plotIds);
+  }
+
+  function loadLayout(plots = []) {
+    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+
+    if (!raw) {
+      const initialLayout = createInitialLayout(plots);
+      saveLayout(initialLayout);
+      return initialLayout;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      return normalizeLayout(parsed);
+    } catch (error) {
+      console.error("畑レイアウトデータの読み込みに失敗しました。", error);
+      return createInitialLayout(plots);
+    }
+  }
+
+  function saveLayout(layout) {
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(normalizeLayout(layout)));
+  }
+
   function createPlotId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
       return `plot_${window.crypto.randomUUID()}`;
@@ -156,6 +249,14 @@
     }
 
     return `schedule_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function createCropPlanId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `crop_plan_${window.crypto.randomUUID()}`;
+    }
+
+    return `crop_plan_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
   function createPhotoId() {
@@ -323,19 +424,27 @@
     STORAGE_KEY,
     WORK_RECORDS_STORAGE_KEY,
     SCHEDULES_STORAGE_KEY,
+    LAYOUT_STORAGE_KEY,
+    CROP_PLANS_STORAGE_KEY,
     PHOTO_DB_NAME,
     PHOTO_STORE_NAME,
     PLOT_STATUSES,
     WORK_TYPES,
+    CROP_PLAN_STATUSES,
     loadPlots,
     savePlots,
     loadWorkRecords,
     saveWorkRecords,
     loadSchedules,
     saveSchedules,
+    loadLayout,
+    saveLayout,
+    loadCropPlans,
+    saveCropPlans,
     createPlotId,
     createWorkRecordId,
     createScheduleId,
+    createCropPlanId,
     createPhotoId,
     savePhotos,
     getPhotosByIds,
