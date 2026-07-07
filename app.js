@@ -8,12 +8,15 @@
   let workRecords = HatakeData.loadWorkRecords();
   let schedules = HatakeData.loadSchedules();
   let layout = HatakeData.loadLayout(plots);
+  let layoutV2 = HatakeData.loadLayoutV2(plots);
   let cropPlans = HatakeData.loadCropPlans();
   let selectedPhotoFiles = [];
   let selectedPhotoPreviewUrls = [];
   let activePhotoUrls = [];
   let flashMessage = "";
   let isLayoutEditMode = false;
+  let isLayoutMultiSelectMode = false;
+  let selectedLayoutCellIds = [];
   let pendingBackup = null;
   let pendingBackupSummary = null;
 
@@ -144,6 +147,24 @@
     return `layout-cell--tone-${(plotIndex % 6) + 1}`;
   }
 
+  function layoutGroupToneClass(groupId) {
+    const groupIndex = layoutV2.groups.findIndex((group) => group.id === groupId);
+
+    if (groupIndex < 0) {
+      return "";
+    }
+
+    return `layout-cell--group-tone-${(groupIndex % 6) + 1}`;
+  }
+
+  function findLayoutGroup(groupId) {
+    return layoutV2.groups.find((group) => group.id === groupId);
+  }
+
+  function findLayoutCell(cellId) {
+    return layoutV2.cells.find((cell) => cell.cellId === cellId);
+  }
+
   function layoutPlotOptions(selectedPlotId) {
     const options = [
       `<option value="" ${selectedPlotId ? "" : "selected"}>空き</option>`
@@ -158,41 +179,155 @@
     return options.join("");
   }
 
-  function layoutCellHtml(cell, index) {
-    const plot = findPlot(cell.plotId);
-    const cellNumber = index + 1;
-    const toneClass = plot ? layoutToneClass(plot.id) : "";
+  function layoutCellDisplay(cell) {
+    const group = cell.groupId ? findLayoutGroup(cell.groupId) : null;
+    const plot = findPlot(group ? group.plotId : cell.plotId);
+
+    if (group) {
+      return {
+        plot,
+        group,
+        label: group.label || plot?.cropName || "表示名未設定",
+        subLabel: plot ? plot.name : "区画未設定",
+        isEmpty: false,
+        toneClass: layoutGroupToneClass(group.id)
+      };
+    }
+
+    return {
+      plot,
+      group: null,
+      label: plot ? plot.name : "空き",
+      subLabel: plot ? plot.cropName || "作物未設定" : "未配置",
+      isEmpty: !plot,
+      toneClass: plot ? layoutToneClass(plot.id) : ""
+    };
+  }
+
+  function layoutCellHtml(cell) {
+    const display = layoutCellDisplay(cell);
+    const isSelected = selectedLayoutCellIds.includes(cell.cellId);
     const cellClasses = [
       "layout-cell",
-      toneClass,
-      plot ? "is-assigned" : "is-empty",
-      isLayoutEditMode ? "is-editing" : ""
+      display.toneClass,
+      display.group ? "is-grouped" : "",
+      display.isEmpty ? "is-empty" : "is-assigned",
+      isLayoutEditMode ? "is-editing" : "",
+      isSelected ? "is-selected" : ""
     ].filter(Boolean).join(" ");
 
-    if (isLayoutEditMode) {
+    if (isLayoutEditMode && isLayoutMultiSelectMode) {
+      return `
+        <button class="${cellClasses}" type="button" data-action="toggle-layout-cell-selection" data-cell-id="${escapeHtml(cell.cellId)}" aria-pressed="${isSelected ? "true" : "false"}">
+          <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
+          <span class="layout-cell__name">${escapeHtml(display.label)}</span>
+          <span class="layout-cell__crop">${escapeHtml(display.subLabel)}</span>
+        </button>
+      `;
+    }
+
+    if (isLayoutEditMode && !display.group) {
       const selectId = `layout-${cell.cellId}`;
       return `
         <div class="${cellClasses}">
-          <span class="layout-cell__number">${cellNumber}</span>
-          <select id="${escapeHtml(selectId)}" class="layout-select" data-layout-cell-id="${escapeHtml(cell.cellId)}" aria-label="${cellNumber}番のマス">
-            ${layoutPlotOptions(plot ? plot.id : "")}
+          <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
+          <select id="${escapeHtml(selectId)}" class="layout-select" data-layout-cell-id="${escapeHtml(cell.cellId)}" aria-label="${escapeHtml(cell.cellNumber)}番のマス">
+            ${layoutPlotOptions(display.plot ? display.plot.id : "")}
           </select>
         </div>
       `;
     }
 
+    if (isLayoutEditMode && display.group) {
+      return `
+        <div class="${cellClasses}">
+          <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
+          <span class="layout-cell__name">${escapeHtml(display.label)}</span>
+          <span class="layout-cell__crop">グループ</span>
+        </div>
+      `;
+    }
+
     return `
-      <button class="${cellClasses}" type="button" ${plot ? `data-action="open-plot" data-id="${escapeHtml(plot.id)}"` : "disabled"}>
-        <span class="layout-cell__number">${cellNumber}</span>
-        <span class="layout-cell__name">${plot ? escapeHtml(plot.name) : "空き"}</span>
-        <span class="layout-cell__crop">${plot ? escapeHtml(plot.cropName || "作物未設定") : "未配置"}</span>
+      <button class="${cellClasses}" type="button" ${display.plot ? `data-action="open-plot" data-id="${escapeHtml(display.plot.id)}"` : "disabled"}>
+        <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
+        <span class="layout-cell__name">${escapeHtml(display.label)}</span>
+        <span class="layout-cell__crop">${escapeHtml(display.subLabel)}</span>
       </button>
+    `;
+  }
+
+  function selectedLayoutGroupCreateHtml() {
+    if (!isLayoutEditMode || !isLayoutMultiSelectMode) {
+      return "";
+    }
+
+    return `
+      <div class="panel layout-editor-panel">
+        <h3>選択マスをまとめる</h3>
+        <p class="empty-text">${selectedLayoutCellIds.length}マスを選択中です。2マス以上を選ぶと作付けエリアとしてまとめられます。</p>
+        <form class="form" id="layout-group-create-form">
+          <div class="field">
+            <label for="layout-group-plot">対象区画</label>
+            <select id="layout-group-plot" name="plotId">
+              ${layoutPlotOptions("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="layout-group-label">表示名</label>
+            <input id="layout-group-label" name="label" type="text" maxlength="40" placeholder="例：じゃがいも">
+          </div>
+          <div class="field">
+            <label for="layout-group-memo">メモ</label>
+            <textarea id="layout-group-memo" name="memo" maxlength="300" placeholder="例：9月から植え付け予定"></textarea>
+          </div>
+          <button class="btn btn--primary" type="button" data-action="create-layout-group" ${selectedLayoutCellIds.length < 2 ? "disabled" : ""}>選択マスをまとめる</button>
+        </form>
+      </div>
+    `;
+  }
+
+  function layoutGroupListHtml() {
+    if (!isLayoutEditMode || !layoutV2.groups.length) {
+      return "";
+    }
+
+    return `
+      <div class="layout-group-list">
+        <h3>まとめ済みエリア</h3>
+        ${layoutV2.groups.map((group) => `
+          <form class="panel layout-group-card" data-layout-group-form>
+            <input type="hidden" name="groupId" value="${escapeHtml(group.id)}">
+            <p class="layout-group-card__title">${escapeHtml(group.label || "表示名未設定")} / ${escapeHtml(group.cellIds.map((cellId) => findLayoutCell(cellId)?.cellNumber).filter(Boolean).join("・"))}</p>
+            <div class="field">
+              <label>対象区画</label>
+              <select name="plotId">
+                ${layoutPlotOptions(group.plotId || "")}
+              </select>
+            </div>
+            <div class="field">
+              <label>表示名</label>
+              <input name="label" type="text" maxlength="40" value="${escapeHtml(group.label)}">
+            </div>
+            <div class="field">
+              <label>メモ</label>
+              <textarea name="memo" maxlength="300">${escapeHtml(group.memo)}</textarea>
+            </div>
+            <div class="card-actions">
+              <button class="btn btn--compact" type="button" data-action="save-layout-group">保存</button>
+              <button class="btn btn--compact btn--danger" type="button" data-action="ungroup-layout-group" data-id="${escapeHtml(group.id)}">解除</button>
+            </div>
+          </form>
+        `).join("")}
+      </div>
     `;
   }
 
   function layoutGridHtml() {
     const statusText = isLayoutEditMode
-      ? "編集モードです。各マスで区画または空きを選べます。"
+      ? isLayoutMultiSelectMode
+        ? "複数選択モードです。マスをタップして選択し、まとめる範囲を作れます。"
+        : "個別編集モードです。グループ化していないマスは区画または空きを選べます。"
       : "割り当て済みのマスをタップすると区画詳細を開きます。";
 
     return `
@@ -200,14 +335,26 @@
         <div class="layout-header">
           <div>
             <h2 id="home-layout-title">畑レイアウト</h2>
-            <p class="empty-text">4×4グリッドで区画の配置を確認できます。</p>
+            <p class="empty-text">4×4グリッドで区画や作付けエリアの配置を確認できます。</p>
           </div>
           <button class="btn btn--compact" type="button" data-action="toggle-layout-edit">${isLayoutEditMode ? "編集を終了" : "レイアウト編集"}</button>
         </div>
+        ${
+          isLayoutEditMode
+            ? `
+              <div class="button-row">
+                <button class="btn btn--compact" type="button" data-action="toggle-layout-multi-select">${isLayoutMultiSelectMode ? "個別編集に戻る" : "複数選択"}</button>
+                <button class="btn btn--compact" type="button" data-action="clear-layout-selection" ${selectedLayoutCellIds.length ? "" : "disabled"}>選択解除</button>
+              </div>
+            `
+            : ""
+        }
         <p class="layout-status">${escapeHtml(statusText)}</p>
         <div class="layout-grid" aria-label="畑レイアウト 4×4">
-          ${layout.map((cell, index) => layoutCellHtml(cell, index)).join("")}
+          ${layoutV2.cells.map((cell) => layoutCellHtml(cell)).join("")}
         </div>
+        ${selectedLayoutGroupCreateHtml()}
+        ${layoutGroupListHtml()}
       </section>
     `;
   }
@@ -352,6 +499,35 @@
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
+  function dateToDateValue(date) {
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+
+    return `${date.getFullYear()}-${month}-${day}`;
+  }
+
+  function addDaysToDateValue(value, days) {
+    const date = dateValueToDate(value);
+
+    if (!date) {
+      return "";
+    }
+
+    date.setDate(date.getDate() + days);
+    return dateToDateValue(date);
+  }
+
+  function daysUntilDateValue(value) {
+    const date = dateValueToDate(value);
+    const today = dateValueToDate(todayValue());
+
+    if (!date || !today) {
+      return null;
+    }
+
+    return Math.ceil((date.getTime() - today.getTime()) / 86400000);
+  }
+
   function addMonths(date, months) {
     return new Date(date.getFullYear(), date.getMonth() + months, 1);
   }
@@ -385,6 +561,150 @@
     return startDate <= monthEnd && endDate >= monthStart;
   }
 
+  function cropPlanPrepDays(plan) {
+    const number = Number(plan?.prepDaysBeforeStart || 0);
+
+    if (!Number.isFinite(number) || number < 0) {
+      return 0;
+    }
+
+    return Math.floor(number);
+  }
+
+  function cropPlanPrepRange(plan) {
+    const prepDays = cropPlanPrepDays(plan);
+
+    if (!plan?.startDate || prepDays <= 0) {
+      return null;
+    }
+
+    return {
+      startDate: addDaysToDateValue(plan.startDate, -prepDays),
+      endDate: addDaysToDateValue(plan.startDate, -1),
+      prepDays
+    };
+  }
+
+  function cropPlanPrepOverlapsMonth(plan, monthDate) {
+    const range = cropPlanPrepRange(plan);
+
+    if (!range) {
+      return false;
+    }
+
+    const startDate = dateValueToDate(range.startDate);
+    const endDate = dateValueToDate(range.endDate);
+
+    if (!startDate || !endDate) {
+      return false;
+    }
+
+    const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+    const monthEnd = monthEndDate(monthDate);
+
+    return startDate <= monthEnd && endDate >= monthStart;
+  }
+
+  function dateValueInMonth(value, monthDate) {
+    const date = dateValueToDate(value);
+
+    if (!date) {
+      return false;
+    }
+
+    return date.getFullYear() === monthDate.getFullYear() && date.getMonth() === monthDate.getMonth();
+  }
+
+  function cropPlansForPlot(plotId) {
+    return sortCropPlansForList(cropPlans.filter((plan) => plan.plotId === plotId));
+  }
+
+  function currentCropPlanForPlot(plotId) {
+    const today = todayValue();
+    const currentPlans = cropPlansForPlot(plotId).filter((plan) => (
+      plan.startDate
+      && plan.startDate <= today
+      && (!plan.endDate || plan.endDate >= today)
+    ));
+
+    return currentPlans.find((plan) => plan.status === HatakeData.CROP_PLAN_STATUSES[1])
+      || currentPlans[currentPlans.length - 1]
+      || null;
+  }
+
+  function nextCropPlanForPlot(plotId, currentPlan = null) {
+    const boundaryDate = currentPlan?.startDate || todayValue();
+
+    return cropPlansForPlot(plotId).find((plan) => (
+      plan.id !== currentPlan?.id
+      && plan.startDate
+      && plan.startDate > boundaryDate
+    )) || null;
+  }
+
+  function cropPlanRemovalDeadline(currentPlan, nextPlan) {
+    if (!currentPlan || !nextPlan?.startDate) {
+      return "";
+    }
+
+    return addDaysToDateValue(nextPlan.startDate, -cropPlanPrepDays(nextPlan));
+  }
+
+  function cropCycleForPlot(plotId) {
+    const plot = findPlot(plotId);
+    const currentPlan = currentCropPlanForPlot(plotId);
+    const nextPlan = nextCropPlanForPlot(plotId, currentPlan);
+    const removalDeadline = cropPlanRemovalDeadline(currentPlan, nextPlan);
+
+    return {
+      plot,
+      currentPlan,
+      nextPlan,
+      removalDeadline,
+      prepDays: cropPlanPrepDays(nextPlan)
+    };
+  }
+
+  function removalDeadlineEntries() {
+    return plots
+      .map((plot) => cropCycleForPlot(plot.id))
+      .filter((cycle) => cycle.currentPlan && cycle.nextPlan && cycle.removalDeadline)
+      .sort((a, b) => String(a.removalDeadline).localeCompare(String(b.removalDeadline)));
+  }
+
+  function removalDeadlineStatusText(deadline) {
+    const days = daysUntilDateValue(deadline);
+
+    if (days == null) {
+      return "";
+    }
+
+    if (days < 0) {
+      return "期限超過";
+    }
+
+    if (days === 0) {
+      return "今日まで";
+    }
+
+    return `${days}日後`;
+  }
+
+  function timelineRemovalEntriesForPlot(plotId) {
+    const plans = cropPlansForPlot(plotId);
+
+    return plans
+      .map((plan, index) => {
+        const nextPlan = plans[index + 1];
+        const removalDeadline = cropPlanRemovalDeadline(plan, nextPlan);
+
+        return nextPlan && removalDeadline
+          ? { currentPlan: plan, nextPlan, removalDeadline }
+          : null;
+      })
+      .filter(Boolean);
+  }
+
   function sortCropPlansForList(items) {
     return [...items].sort((a, b) => {
       const dateCompare = String(a.startDate || "9999-99-99").localeCompare(String(b.startDate || "9999-99-99"));
@@ -416,6 +736,8 @@
     const plotName = plot ? plot.name : "削除済みの区画";
     const showActions = options.showActions !== false;
     const planId = escapeHtml(plan.id);
+    const prepDays = cropPlanPrepDays(plan);
+    const hasCycleMeta = Boolean(plan.plantingMethod || prepDays);
 
     return `
       <article class="card crop-plan-card">
@@ -436,6 +758,16 @@
             <span class="meta-value">${escapeHtml(formatDate(plan.endDate))}</span>
           </div>
         </div>
+        ${
+          hasCycleMeta
+            ? `
+              <div class="crop-plan-extra">
+                ${plan.plantingMethod ? `<span>植え方：${escapeHtml(plan.plantingMethod)}</span>` : ""}
+                ${prepDays ? `<span>準備：開始${escapeHtml(prepDays)}日前</span>` : ""}
+              </div>
+            `
+            : ""
+        }
         <p class="crop-plan-memo">${escapeHtml(plan.memo || "メモはありません。")}</p>
         ${
           showActions
@@ -463,6 +795,77 @@
     return `<div class="crop-plan-list">${items.map((plan) => cropPlanCardHtml(plan, options)).join("")}</div>`;
   }
 
+  function removalDeadlineListHtml(items) {
+    if (!items.length) {
+      return `
+        <div class="panel panel--empty">
+          <p class="empty-text">撤去期限が近い区画はまだありません。</p>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="deadline-list">
+        ${items.map((item) => `
+          <article class="card deadline-card">
+            <div>
+              <p class="crop-plan-plot">${escapeHtml(item.plot?.name || "区画未設定")}</p>
+              <h3>${escapeHtml(item.currentPlan.cropName)} → ${escapeHtml(item.nextPlan.cropName)}</h3>
+              <p class="memo-text">次作の開始：${escapeHtml(formatDate(item.nextPlan.startDate))}</p>
+            </div>
+            <div class="deadline-card__date">
+              <span>撤去期限</span>
+              <strong>${escapeHtml(formatDate(item.removalDeadline))}</strong>
+              <small>${escapeHtml(removalDeadlineStatusText(item.removalDeadline))}</small>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function cropCycleHtml(plotId) {
+    const cycle = cropCycleForPlot(plotId);
+    const currentText = cycle.currentPlan
+      ? `${cycle.currentPlan.cropName}（${formatDate(cycle.currentPlan.startDate)}〜${formatDate(cycle.currentPlan.endDate)}）`
+      : "現在の栽培計画はありません。";
+    const nextText = cycle.nextPlan
+      ? `${cycle.nextPlan.cropName}（${formatDate(cycle.nextPlan.startDate)}開始）`
+      : "次の栽培計画はありません。";
+
+    return `
+      <div class="cycle-grid">
+        <div class="panel cycle-panel">
+          <span class="cycle-label">現在の作物</span>
+          <strong>${escapeHtml(currentText)}</strong>
+        </div>
+        <div class="panel cycle-panel">
+          <span class="cycle-label">次の作物</span>
+          <strong>${escapeHtml(nextText)}</strong>
+          ${
+            cycle.nextPlan?.plantingMethod
+              ? `<p class="memo-text">植え方：${escapeHtml(cycle.nextPlan.plantingMethod)}</p>`
+              : ""
+          }
+        </div>
+        <div class="panel cycle-panel">
+          <span class="cycle-label">撤去期限</span>
+          <strong>${cycle.removalDeadline ? escapeHtml(formatDate(cycle.removalDeadline)) : "未計算"}</strong>
+          ${
+            cycle.removalDeadline
+              ? `<p class="memo-text">${escapeHtml(removalDeadlineStatusText(cycle.removalDeadline))}</p>`
+              : `<p class="memo-text">現在の作物と次の作物がある場合に自動計算します。</p>`
+          }
+        </div>
+        <div class="panel cycle-panel">
+          <span class="cycle-label">準備期間</span>
+          <strong>${escapeHtml(cycle.prepDays)}日前</strong>
+          <p class="memo-text">次の作物の開始日から逆算します。</p>
+        </div>
+      </div>
+    `;
+  }
+
   function cropTimelineHtml() {
     if (!plots.length) {
       return `
@@ -487,14 +890,19 @@
             </div>
             ${months.map((month) => {
               const plansInMonth = sortedPlans.filter((plan) => plan.plotId === plot.id && cropPlanOverlapsMonth(plan, month));
+              const prepPlansInMonth = sortedPlans.filter((plan) => plan.plotId === plot.id && cropPlanPrepOverlapsMonth(plan, month));
+              const removalEntriesInMonth = timelineRemovalEntriesForPlot(plot.id).filter((entry) => dateValueInMonth(entry.removalDeadline, month));
+              const hasTimelineItems = plansInMonth.length || prepPlansInMonth.length || removalEntriesInMonth.length;
 
-              if (!plansInMonth.length) {
+              if (!hasTimelineItems) {
                 return `<div class="timeline-cell timeline-cell--empty">空き</div>`;
               }
 
               return `
                 <div class="timeline-cell">
                   ${plansInMonth.map((plan) => `<span class="timeline-crop" data-plan-status="${escapeHtml(plan.status)}">${escapeHtml(plan.cropName)}</span>`).join("")}
+                  ${prepPlansInMonth.map((plan) => `<span class="timeline-crop timeline-crop--prep">準備：${escapeHtml(plan.cropName)}</span>`).join("")}
+                  ${removalEntriesInMonth.map((entry) => `<span class="timeline-crop timeline-crop--deadline">撤去：${escapeHtml(entry.currentPlan.cropName)} ${escapeHtml(formatDate(entry.removalDeadline))}</span>`).join("")}
                 </div>
               `;
             }).join("")}
@@ -562,13 +970,14 @@
     return {
       appName: "hatake-note-local",
       backupVersion: 1,
-      appVersion: "1.2-prototype1",
+      appVersion: "1.4-prototype1",
       exportedAt: new Date().toISOString(),
       data: {
         plots: cloneForBackup(plots),
         workRecords: cloneForBackup(workRecords),
         schedules: cloneForBackup(schedules),
         layout: cloneForBackup(layout),
+        layoutV2: cloneForBackup(layoutV2),
         cropPlans: cloneForBackup(cropPlans)
       },
       photos: backupPhotos
@@ -611,6 +1020,9 @@
       workRecords: ensureBackupArray(value.data.workRecords, "作業記録"),
       schedules: ensureBackupArray(value.data.schedules, "育成スケジュール"),
       layout: ensureBackupArray(value.data.layout, "畑レイアウト"),
+      layoutV2: value.data.layoutV2
+        ? HatakeData.normalizeLayoutV2(value.data.layoutV2, value.data.layout)
+        : HatakeData.createLayoutV2FromLayout(value.data.layout),
       cropPlans: ensureBackupArray(value.data.cropPlans, "栽培計画")
     };
     const photos = value.photos == null ? [] : ensureBackupArray(value.photos, "写真データ");
@@ -631,6 +1043,8 @@
       workRecords: backup.data.workRecords.length,
       schedules: backup.data.schedules.length,
       layout: backup.data.layout.length,
+      layoutV2: backup.data.layoutV2?.cells?.length || 0,
+      layoutGroups: backup.data.layoutV2?.groups?.length || 0,
       cropPlans: backup.data.cropPlans.length,
       photos: backup.photos.length
     };
@@ -649,6 +1063,7 @@
           <li>作業記録：${escapeHtml(summary.workRecords)}件</li>
           <li>育成スケジュール：${escapeHtml(summary.schedules)}件</li>
           <li>畑レイアウト：${escapeHtml(summary.layout)}マス</li>
+          <li>自由レイアウト：${escapeHtml(summary.layoutV2)}マス / ${escapeHtml(summary.layoutGroups)}グループ</li>
           <li>栽培計画：${escapeHtml(summary.cropPlans)}件</li>
           <li>写真：${escapeHtml(summary.photos)}枚</li>
         </ul>
@@ -731,12 +1146,14 @@
       HatakeData.saveWorkRecords(pendingBackup.data.workRecords);
       HatakeData.saveSchedules(pendingBackup.data.schedules);
       HatakeData.saveLayout(pendingBackup.data.layout);
+      HatakeData.saveLayoutV2(pendingBackup.data.layoutV2);
       HatakeData.saveCropPlans(pendingBackup.data.cropPlans);
 
       plots = HatakeData.loadPlots();
       workRecords = HatakeData.loadWorkRecords();
       schedules = HatakeData.loadSchedules();
       layout = HatakeData.loadLayout(plots);
+      layoutV2 = HatakeData.loadLayoutV2(plots);
       cropPlans = HatakeData.loadCropPlans();
       pendingBackup = null;
       pendingBackupSummary = null;
@@ -890,6 +1307,7 @@
     const recentWorkRecords = sortWorkRecordsByDate(workRecords).slice(0, 5);
     const upcomingSchedules = sortUpcomingSchedules(schedules).slice(0, 5);
     const upcomingPlans = upcomingCropPlans().slice(0, 3);
+    const upcomingRemovalDeadlines = removalDeadlineEntries().slice(0, 5);
 
     app.innerHTML = `
       <section class="view">
@@ -908,6 +1326,11 @@
         </div>
 
         ${layoutGridHtml()}
+
+        <section class="section" aria-labelledby="home-removal-deadline-title">
+          <h2 id="home-removal-deadline-title">撤去期限が近い区画</h2>
+          ${removalDeadlineListHtml(upcomingRemovalDeadlines)}
+        </section>
 
         <section class="section" aria-labelledby="home-crop-plan-title">
           <div class="section-header">
@@ -1013,6 +1436,11 @@
           ${detailItem("収穫予定日", formatDate(plot.harvestDate))}
           ${detailItem("メモ", plot.memo || "メモはまだありません。")}
         </div>
+
+        <section class="section" aria-labelledby="detail-crop-cycle-title">
+          <h2 id="detail-crop-cycle-title">作付けサイクル</h2>
+          ${cropCycleHtml(plot.id)}
+        </section>
 
         <section class="section" aria-labelledby="detail-work-title">
           <h2 id="detail-work-title">最近の作業記録</h2>
@@ -1532,6 +1960,17 @@
           </div>
 
           <div class="field">
+            <label for="crop-plan-method">植え方</label>
+            <input id="crop-plan-method" name="plantingMethod" type="text" maxlength="80" autocomplete="off" placeholder="例：種まき / 苗の植え付け / 定植" value="${escapeHtml(plan ? plan.plantingMethod : "")}">
+          </div>
+
+          <div class="field">
+            <label for="crop-plan-prep-days">開始前の準備日数</label>
+            <input id="crop-plan-prep-days" name="prepDaysBeforeStart" type="number" min="0" max="365" step="1" value="${escapeHtml(plan ? cropPlanPrepDays(plan) : 0)}">
+            <p class="form-help">次の作物の開始日から逆算して、現在の作物の撤去期限を計算します。</p>
+          </div>
+
+          <div class="field">
             <label for="crop-plan-start">開始日</label>
             <input id="crop-plan-start" name="startDate" type="date" required value="${escapeHtml(plan ? plan.startDate : todayValue())}">
           </div>
@@ -1646,18 +2085,162 @@
   }
 
   function updateLayoutCell(cellId, plotId) {
-    layout = layout.map((cell) => {
-      if (cell.cellId !== cellId) {
+    layoutV2 = {
+      ...layoutV2,
+      cells: layoutV2.cells.map((cell) => {
+        if (cell.cellId !== cellId || cell.groupId) {
+          return cell;
+        }
+
+        return {
+          ...cell,
+          plotId: plotId || null
+        };
+      })
+    };
+
+    HatakeData.saveLayoutV2(layoutV2);
+    render();
+  }
+
+  function toggleLayoutCellSelection(cellId) {
+    selectedLayoutCellIds = selectedLayoutCellIds.includes(cellId)
+      ? selectedLayoutCellIds.filter((id) => id !== cellId)
+      : [...selectedLayoutCellIds, cellId];
+    render();
+  }
+
+  function removeCellsFromExistingGroups(cellIds) {
+    const targetCellIds = new Set(cellIds);
+    const groups = layoutV2.groups.map((group) => ({
+      ...group,
+      cellIds: group.cellIds.filter((cellId) => !targetCellIds.has(cellId))
+    })).filter((group) => group.cellIds.length);
+    const groupIds = new Set(groups.map((group) => group.id));
+
+    return {
+      ...layoutV2,
+      groups,
+      cells: layoutV2.cells.map((cell) => {
+        if (targetCellIds.has(cell.cellId) || !groupIds.has(cell.groupId)) {
+          return {
+            ...cell,
+            groupId: null
+          };
+        }
+
         return cell;
-      }
+      })
+    };
+  }
 
-      return {
-        ...cell,
-        plotId: plotId || null
-      };
+  function createLayoutGroupFromForm(form) {
+    if (selectedLayoutCellIds.length < 2) {
+      alert("2マス以上選択してください。");
+      return;
+    }
+
+    const formData = new FormData(form);
+    const plotId = String(formData.get("plotId") || "");
+    const label = String(formData.get("label") || "").trim();
+    const memo = String(formData.get("memo") || "").trim();
+
+    if (!label) {
+      alert("表示名を入力してください。");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const groupId = HatakeData.createLayoutGroupId();
+    let nextLayout = removeCellsFromExistingGroups(selectedLayoutCellIds);
+    const group = {
+      id: groupId,
+      cellIds: [...selectedLayoutCellIds],
+      plotId: plotId || null,
+      label,
+      memo,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    nextLayout = {
+      ...nextLayout,
+      groups: [...nextLayout.groups, group],
+      cells: nextLayout.cells.map((cell) => (
+        selectedLayoutCellIds.includes(cell.cellId)
+          ? { ...cell, plotId: plotId || null, groupId }
+          : cell
+      ))
+    };
+
+    layoutV2 = HatakeData.normalizeLayoutV2(nextLayout);
+    HatakeData.saveLayoutV2(layoutV2);
+    selectedLayoutCellIds = [];
+    setFlashMessage("選択マスをまとめました。");
+    render();
+  }
+
+  function saveLayoutGroupFromForm(form) {
+    const formData = new FormData(form);
+    const groupId = String(formData.get("groupId") || "");
+    const plotId = String(formData.get("plotId") || "");
+    const label = String(formData.get("label") || "").trim();
+    const memo = String(formData.get("memo") || "").trim();
+    const group = findLayoutGroup(groupId);
+
+    if (!group) {
+      alert("編集対象のグループが見つかりません。");
+      return;
+    }
+
+    if (!label) {
+      alert("表示名を入力してください。");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    layoutV2 = HatakeData.normalizeLayoutV2({
+      ...layoutV2,
+      groups: layoutV2.groups.map((item) => (
+        item.id === groupId
+          ? { ...item, plotId: plotId || null, label, memo, updatedAt: now }
+          : item
+      )),
+      cells: layoutV2.cells.map((cell) => (
+        cell.groupId === groupId
+          ? { ...cell, plotId: plotId || null }
+          : cell
+      ))
     });
+    HatakeData.saveLayoutV2(layoutV2);
+    setFlashMessage("まとめ済みエリアを更新しました。");
+    render();
+  }
 
-    HatakeData.saveLayout(layout);
+  function ungroupLayoutGroup(groupId) {
+    const group = findLayoutGroup(groupId);
+
+    if (!group) {
+      alert("解除対象のグループが見つかりません。");
+      return;
+    }
+
+    if (!confirm("この作付けエリアのグループを解除しますか？")) {
+      return;
+    }
+
+    layoutV2 = HatakeData.normalizeLayoutV2({
+      ...layoutV2,
+      groups: layoutV2.groups.filter((item) => item.id !== groupId),
+      cells: layoutV2.cells.map((cell) => (
+        cell.groupId === groupId
+          ? { ...cell, groupId: null, plotId: group.plotId || cell.plotId || null }
+          : cell
+      ))
+    });
+    HatakeData.saveLayoutV2(layoutV2);
+    selectedLayoutCellIds = selectedLayoutCellIds.filter((cellId) => !group.cellIds.includes(cellId));
+    setFlashMessage("グループを解除しました。");
     render();
   }
 
@@ -1889,6 +2472,10 @@
     const cropName = String(formData.get("cropName") || "").trim();
     const startDate = String(formData.get("startDate") || "");
     const endDate = String(formData.get("endDate") || "");
+    const prepDaysBeforeStartValue = Number(formData.get("prepDaysBeforeStart") || 0);
+    const prepDaysBeforeStart = Number.isFinite(prepDaysBeforeStartValue) && prepDaysBeforeStartValue > 0
+      ? Math.floor(prepDaysBeforeStartValue)
+      : 0;
 
     if (!plotId || !cropName || !startDate || !endDate) {
       alert("区画、作物名、開始日、終了予定日を入力してください。");
@@ -1911,6 +2498,8 @@
       cropName,
       startDate,
       endDate,
+      plantingMethod: String(formData.get("plantingMethod") || "").trim(),
+      prepDaysBeforeStart,
       memo: String(formData.get("memo") || "").trim(),
       status: String(formData.get("status") || "予定"),
       createdAt: existingPlan ? existingPlan.createdAt : now,
@@ -1971,7 +2560,41 @@
     if (action === "go-backup") setRoute("backup");
     if (action === "toggle-layout-edit") {
       isLayoutEditMode = !isLayoutEditMode;
+      if (!isLayoutEditMode) {
+        isLayoutMultiSelectMode = false;
+        selectedLayoutCellIds = [];
+      }
       render();
+    }
+    if (action === "toggle-layout-multi-select") {
+      isLayoutMultiSelectMode = !isLayoutMultiSelectMode;
+      selectedLayoutCellIds = [];
+      render();
+    }
+    if (action === "clear-layout-selection") {
+      selectedLayoutCellIds = [];
+      render();
+    }
+    if (action === "toggle-layout-cell-selection") {
+      toggleLayoutCellSelection(target.dataset.cellId);
+    }
+    if (action === "create-layout-group") {
+      const form = target.closest("#layout-group-create-form");
+      if (form) {
+        createLayoutGroupFromForm(form);
+      }
+    }
+    if (action === "save-layout-group") {
+      const form = target.closest("[data-layout-group-form]");
+      if (form) {
+        saveLayoutGroupFromForm(form);
+      }
+    }
+    if (action === "ungroup-layout-group") {
+      ungroupLayoutGroup(target.dataset.id);
+    }
+    if (action === "toggle-layout-edit" || action === "toggle-layout-multi-select" || action === "clear-layout-selection" || action === "toggle-layout-cell-selection" || action === "create-layout-group" || action === "save-layout-group" || action === "ungroup-layout-group") {
+      return;
     }
     if (action === "open-photo") openPhotoModal(target.dataset.photoUrl);
     if (action === "close-photo") closePhotoModal();
@@ -2061,6 +2684,8 @@
 
     if (route !== "home") {
       isLayoutEditMode = false;
+      isLayoutMultiSelectMode = false;
+      selectedLayoutCellIds = [];
     }
 
     setActiveNav(route);

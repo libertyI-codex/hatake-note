@@ -5,8 +5,11 @@
   const WORK_RECORDS_STORAGE_KEY = "hatakeNoteLocal.workRecords.v1";
   const SCHEDULES_STORAGE_KEY = "hatakeNoteLocal.schedules.v1";
   const LAYOUT_STORAGE_KEY = "hatakeNoteLocal.layout.v1";
+  const LAYOUT_V2_STORAGE_KEY = "hatakeNoteLocal.layout.v2";
   const CROP_PLANS_STORAGE_KEY = "hatakeNoteLocal.cropPlans.v1";
   const LAYOUT_CELL_COUNT = 16;
+  const LAYOUT_ROWS = 4;
+  const LAYOUT_COLS = 4;
   const PHOTO_DB_NAME = "hatakeNoteLocalDB";
   const PHOTO_STORE_NAME = "photos";
 
@@ -138,6 +141,16 @@
     localStorage.setItem(SCHEDULES_STORAGE_KEY, JSON.stringify(schedules));
   }
 
+  function normalizeCropPlanPrepDays(value) {
+    const number = Number(value);
+
+    if (!Number.isFinite(number) || number < 0) {
+      return 0;
+    }
+
+    return Math.floor(number);
+  }
+
   function normalizeCropPlan(plan) {
     const status = CROP_PLAN_STATUSES.includes(plan?.status) ? plan.status : "予定";
 
@@ -149,6 +162,8 @@
       endDate: String(plan?.endDate || ""),
       memo: String(plan?.memo || ""),
       status,
+      plantingMethod: String(plan?.plantingMethod || ""),
+      prepDaysBeforeStart: normalizeCropPlanPrepDays(plan?.prepDaysBeforeStart),
       createdAt: String(plan?.createdAt || ""),
       updatedAt: String(plan?.updatedAt || "")
     };
@@ -227,6 +242,124 @@
     localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(normalizeLayout(layout)));
   }
 
+  function normalizeLayoutV2Cell(cell, index) {
+    const cellNumber = index + 1;
+    const cellId = `cell-${cellNumber}`;
+
+    return {
+      cellId,
+      cellNumber,
+      plotId: typeof cell?.plotId === "string" && cell.plotId ? cell.plotId : null,
+      groupId: typeof cell?.groupId === "string" && cell.groupId ? cell.groupId : null
+    };
+  }
+
+  function normalizeLayoutV2(layoutV2, fallbackLayout = []) {
+    const fallbackCells = Array.isArray(fallbackLayout) ? normalizeLayout(fallbackLayout) : createLayoutCells();
+    const sourceCells = Array.isArray(layoutV2?.cells) ? layoutV2.cells : fallbackCells;
+    const cells = Array.from({ length: LAYOUT_CELL_COUNT }, (_, index) => {
+      const cellId = `cell-${index + 1}`;
+      const sourceCell = sourceCells.find((cell) => cell && cell.cellId === cellId) || sourceCells[index] || fallbackCells[index];
+      return normalizeLayoutV2Cell(sourceCell, index);
+    });
+    const validCellIds = new Set(cells.map((cell) => cell.cellId));
+    const groups = Array.isArray(layoutV2?.groups)
+      ? layoutV2.groups.map((group) => {
+        const cellIds = Array.isArray(group?.cellIds)
+          ? group.cellIds.filter((cellId) => validCellIds.has(cellId))
+          : [];
+
+        return {
+          id: String(group?.id || ""),
+          cellIds: [...new Set(cellIds)],
+          plotId: typeof group?.plotId === "string" && group.plotId ? group.plotId : null,
+          label: String(group?.label || ""),
+          memo: String(group?.memo || ""),
+          createdAt: String(group?.createdAt || ""),
+          updatedAt: String(group?.updatedAt || "")
+        };
+      }).filter((group) => group.id && group.cellIds.length)
+      : [];
+    const cellGroupMap = new Map();
+    groups.forEach((group) => {
+      group.cellIds.forEach((cellId) => {
+        cellGroupMap.set(cellId, group.id);
+      });
+    });
+    cells.forEach((cell) => {
+      const groupId = cellGroupMap.get(cell.cellId) || null;
+      const group = groups.find((item) => item.id === groupId);
+      cell.groupId = groupId;
+
+      if (group) {
+        cell.plotId = group.plotId;
+      }
+    });
+
+    return {
+      version: 2,
+      rows: LAYOUT_ROWS,
+      cols: LAYOUT_COLS,
+      cells,
+      groups
+    };
+  }
+
+  function createLayoutV2FromLayout(layout = []) {
+    const v1Cells = normalizeLayout(layout);
+
+    return normalizeLayoutV2({
+      version: 2,
+      rows: LAYOUT_ROWS,
+      cols: LAYOUT_COLS,
+      cells: v1Cells.map((cell, index) => ({
+        cellId: cell.cellId,
+        cellNumber: index + 1,
+        plotId: cell.plotId,
+        groupId: null
+      })),
+      groups: []
+    }, v1Cells);
+  }
+
+  function createInitialLayoutV2(plots = []) {
+    return createLayoutV2FromLayout(createInitialLayout(plots));
+  }
+
+  function loadLayoutV2(plots = []) {
+    const rawV2 = localStorage.getItem(LAYOUT_V2_STORAGE_KEY);
+
+    if (rawV2) {
+      try {
+        return normalizeLayoutV2(JSON.parse(rawV2));
+      } catch (error) {
+        console.error("畑レイアウトv2データの読み込みに失敗しました。", error);
+      }
+    }
+
+    const rawV1 = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    let initialLayoutV2 = null;
+
+    if (rawV1) {
+      try {
+        initialLayoutV2 = createLayoutV2FromLayout(JSON.parse(rawV1));
+      } catch (error) {
+        console.error("畑レイアウトv1からv2への移行に失敗しました。", error);
+      }
+    }
+
+    if (!initialLayoutV2) {
+      initialLayoutV2 = createInitialLayoutV2(plots);
+    }
+
+    saveLayoutV2(initialLayoutV2);
+    return initialLayoutV2;
+  }
+
+  function saveLayoutV2(layoutV2) {
+    localStorage.setItem(LAYOUT_V2_STORAGE_KEY, JSON.stringify(normalizeLayoutV2(layoutV2)));
+  }
+
   function createPlotId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
       return `plot_${window.crypto.randomUUID()}`;
@@ -265,6 +398,14 @@
     }
 
     return `photo_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  function createLayoutGroupId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `layout_group_${window.crypto.randomUUID()}`;
+    }
+
+    return `layout_group_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 
   function openPhotoDb() {
@@ -466,6 +607,7 @@
     WORK_RECORDS_STORAGE_KEY,
     SCHEDULES_STORAGE_KEY,
     LAYOUT_STORAGE_KEY,
+    LAYOUT_V2_STORAGE_KEY,
     CROP_PLANS_STORAGE_KEY,
     PHOTO_DB_NAME,
     PHOTO_STORE_NAME,
@@ -480,6 +622,10 @@
     saveSchedules,
     loadLayout,
     saveLayout,
+    loadLayoutV2,
+    saveLayoutV2,
+    normalizeLayoutV2,
+    createLayoutV2FromLayout,
     loadCropPlans,
     saveCropPlans,
     createPlotId,
@@ -487,6 +633,7 @@
     createScheduleId,
     createCropPlanId,
     createPhotoId,
+    createLayoutGroupId,
     savePhotos,
     getPhotosByIds,
     getPhotosByPlotId,
