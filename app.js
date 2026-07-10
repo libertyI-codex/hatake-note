@@ -7,18 +7,10 @@
   let plots = HatakeData.loadPlots();
   let workRecords = HatakeData.loadWorkRecords();
   let schedules = HatakeData.loadSchedules();
-  let layout = HatakeData.loadLayout(plots);
-  let layoutV2 = HatakeData.loadLayoutV2(plots);
-  let cropPlans = HatakeData.loadCropPlans();
   let selectedPhotoFiles = [];
   let selectedPhotoPreviewUrls = [];
   let activePhotoUrls = [];
   let flashMessage = "";
-  let isLayoutEditMode = false;
-  let isLayoutMultiSelectMode = false;
-  let selectedLayoutCellIds = [];
-  let pendingBackup = null;
-  let pendingBackupSummary = null;
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -79,14 +71,6 @@
     return workRecords.find((record) => record.id === workRecordId);
   }
 
-  function findSchedule(scheduleId) {
-    return schedules.find((schedule) => schedule.id === scheduleId);
-  }
-
-  function findCropPlan(cropPlanId) {
-    return cropPlans.find((plan) => plan.id === cropPlanId);
-  }
-
   function releasePhotoObjectUrls() {
     activePhotoUrls.forEach((url) => URL.revokeObjectURL(url));
     activePhotoUrls = [];
@@ -124,8 +108,8 @@
       const isActive =
         (nav === "home" && route === "home") ||
         (nav === "plots" && (route === "plots" || route.startsWith("plot/"))) ||
-        (nav === "work" && (route === "work-new" || route.startsWith("work-edit/"))) ||
-        (nav === "schedules" && (route === "schedules" || route === "schedule-new" || route.startsWith("schedule-edit/"))) ||
+        (nav === "work" && route === "work-new") ||
+        (nav === "schedules" && (route === "schedules" || route === "schedule-new")) ||
         (nav === "new" && route === "plot-new");
 
       button.classList.toggle("is-active", isActive);
@@ -135,228 +119,6 @@
 
   function findPlot(plotId) {
     return plots.find((plot) => plot.id === plotId);
-  }
-
-  function layoutToneClass(plotId) {
-    const plotIndex = plots.findIndex((plot) => plot.id === plotId);
-
-    if (plotIndex < 0) {
-      return "";
-    }
-
-    return `layout-cell--tone-${(plotIndex % 6) + 1}`;
-  }
-
-  function layoutGroupToneClass(groupId) {
-    const groupIndex = layoutV2.groups.findIndex((group) => group.id === groupId);
-
-    if (groupIndex < 0) {
-      return "";
-    }
-
-    return `layout-cell--group-tone-${(groupIndex % 6) + 1}`;
-  }
-
-  function findLayoutGroup(groupId) {
-    return layoutV2.groups.find((group) => group.id === groupId);
-  }
-
-  function findLayoutCell(cellId) {
-    return layoutV2.cells.find((cell) => cell.cellId === cellId);
-  }
-
-  function layoutPlotOptions(selectedPlotId) {
-    const options = [
-      `<option value="" ${selectedPlotId ? "" : "selected"}>空き</option>`
-    ];
-
-    plots.forEach((plot) => {
-      const selected = plot.id === selectedPlotId ? "selected" : "";
-      const label = `${plot.name}：${plot.cropName || "作物未設定"}`;
-      options.push(`<option value="${escapeHtml(plot.id)}" ${selected}>${escapeHtml(label)}</option>`);
-    });
-
-    return options.join("");
-  }
-
-  function layoutCellDisplay(cell) {
-    const group = cell.groupId ? findLayoutGroup(cell.groupId) : null;
-    const plot = findPlot(group ? group.plotId : cell.plotId);
-
-    if (group) {
-      return {
-        plot,
-        group,
-        label: group.label || plot?.cropName || "表示名未設定",
-        subLabel: plot ? plot.name : "区画未設定",
-        isEmpty: false,
-        toneClass: layoutGroupToneClass(group.id)
-      };
-    }
-
-    return {
-      plot,
-      group: null,
-      label: plot ? plot.name : "空き",
-      subLabel: plot ? plot.cropName || "作物未設定" : "未配置",
-      isEmpty: !plot,
-      toneClass: plot ? layoutToneClass(plot.id) : ""
-    };
-  }
-
-  function layoutCellHtml(cell) {
-    const display = layoutCellDisplay(cell);
-    const isSelected = selectedLayoutCellIds.includes(cell.cellId);
-    const cellClasses = [
-      "layout-cell",
-      display.toneClass,
-      display.group ? "is-grouped" : "",
-      display.isEmpty ? "is-empty" : "is-assigned",
-      isLayoutEditMode ? "is-editing" : "",
-      isSelected ? "is-selected" : ""
-    ].filter(Boolean).join(" ");
-
-    if (isLayoutEditMode && isLayoutMultiSelectMode) {
-      return `
-        <button class="${cellClasses}" type="button" data-action="toggle-layout-cell-selection" data-cell-id="${escapeHtml(cell.cellId)}" aria-pressed="${isSelected ? "true" : "false"}">
-          <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
-          <span class="layout-cell__name">${escapeHtml(display.label)}</span>
-          <span class="layout-cell__crop">${escapeHtml(display.subLabel)}</span>
-        </button>
-      `;
-    }
-
-    if (isLayoutEditMode && !display.group) {
-      const selectId = `layout-${cell.cellId}`;
-      return `
-        <div class="${cellClasses}">
-          <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
-          <select id="${escapeHtml(selectId)}" class="layout-select" data-layout-cell-id="${escapeHtml(cell.cellId)}" aria-label="${escapeHtml(cell.cellNumber)}番のマス">
-            ${layoutPlotOptions(display.plot ? display.plot.id : "")}
-          </select>
-        </div>
-      `;
-    }
-
-    if (isLayoutEditMode && display.group) {
-      return `
-        <div class="${cellClasses}">
-          <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
-          <span class="layout-cell__name">${escapeHtml(display.label)}</span>
-          <span class="layout-cell__crop">グループ</span>
-        </div>
-      `;
-    }
-
-    return `
-      <button class="${cellClasses}" type="button" ${display.plot ? `data-action="open-plot" data-id="${escapeHtml(display.plot.id)}"` : "disabled"}>
-        <span class="layout-cell__number">${escapeHtml(cell.cellNumber)}</span>
-        <span class="layout-cell__name">${escapeHtml(display.label)}</span>
-        <span class="layout-cell__crop">${escapeHtml(display.subLabel)}</span>
-      </button>
-    `;
-  }
-
-  function selectedLayoutGroupCreateHtml() {
-    if (!isLayoutEditMode || !isLayoutMultiSelectMode) {
-      return "";
-    }
-
-    return `
-      <div class="panel layout-editor-panel">
-        <h3>選択マスをまとめる</h3>
-        <p class="empty-text">${selectedLayoutCellIds.length}マスを選択中です。2マス以上を選ぶと作付けエリアとしてまとめられます。</p>
-        <form class="form" id="layout-group-create-form">
-          <div class="field">
-            <label for="layout-group-plot">対象区画</label>
-            <select id="layout-group-plot" name="plotId">
-              ${layoutPlotOptions("")}
-            </select>
-          </div>
-          <div class="field">
-            <label for="layout-group-label">表示名</label>
-            <input id="layout-group-label" name="label" type="text" maxlength="40" placeholder="例：じゃがいも">
-          </div>
-          <div class="field">
-            <label for="layout-group-memo">メモ</label>
-            <textarea id="layout-group-memo" name="memo" maxlength="300" placeholder="例：9月から植え付け予定"></textarea>
-          </div>
-          <button class="btn btn--primary" type="button" data-action="create-layout-group" ${selectedLayoutCellIds.length < 2 ? "disabled" : ""}>選択マスをまとめる</button>
-        </form>
-      </div>
-    `;
-  }
-
-  function layoutGroupListHtml() {
-    if (!isLayoutEditMode || !layoutV2.groups.length) {
-      return "";
-    }
-
-    return `
-      <div class="layout-group-list">
-        <h3>まとめ済みエリア</h3>
-        ${layoutV2.groups.map((group) => `
-          <form class="panel layout-group-card" data-layout-group-form>
-            <input type="hidden" name="groupId" value="${escapeHtml(group.id)}">
-            <p class="layout-group-card__title">${escapeHtml(group.label || "表示名未設定")} / ${escapeHtml(group.cellIds.map((cellId) => findLayoutCell(cellId)?.cellNumber).filter(Boolean).join("・"))}</p>
-            <div class="field">
-              <label>対象区画</label>
-              <select name="plotId">
-                ${layoutPlotOptions(group.plotId || "")}
-              </select>
-            </div>
-            <div class="field">
-              <label>表示名</label>
-              <input name="label" type="text" maxlength="40" value="${escapeHtml(group.label)}">
-            </div>
-            <div class="field">
-              <label>メモ</label>
-              <textarea name="memo" maxlength="300">${escapeHtml(group.memo)}</textarea>
-            </div>
-            <div class="card-actions">
-              <button class="btn btn--compact" type="button" data-action="save-layout-group">保存</button>
-              <button class="btn btn--compact btn--danger" type="button" data-action="ungroup-layout-group" data-id="${escapeHtml(group.id)}">解除</button>
-            </div>
-          </form>
-        `).join("")}
-      </div>
-    `;
-  }
-
-  function layoutGridHtml() {
-    const statusText = isLayoutEditMode
-      ? isLayoutMultiSelectMode
-        ? "複数選択モードです。マスをタップして選択し、まとめる範囲を作れます。"
-        : "個別編集モードです。グループ化していないマスは区画または空きを選べます。"
-      : "割り当て済みのマスをタップすると区画詳細を開きます。";
-
-    return `
-      <section class="section" aria-labelledby="home-layout-title">
-        <div class="layout-header">
-          <div>
-            <h2 id="home-layout-title">畑レイアウト</h2>
-            <p class="empty-text">4×4グリッドで区画や作付けエリアの配置を確認できます。</p>
-          </div>
-          <button class="btn btn--compact" type="button" data-action="toggle-layout-edit">${isLayoutEditMode ? "編集を終了" : "レイアウト編集"}</button>
-        </div>
-        ${
-          isLayoutEditMode
-            ? `
-              <div class="button-row">
-                <button class="btn btn--compact" type="button" data-action="toggle-layout-multi-select">${isLayoutMultiSelectMode ? "個別編集に戻る" : "複数選択"}</button>
-                <button class="btn btn--compact" type="button" data-action="clear-layout-selection" ${selectedLayoutCellIds.length ? "" : "disabled"}>選択解除</button>
-              </div>
-            `
-            : ""
-        }
-        <p class="layout-status">${escapeHtml(statusText)}</p>
-        <div class="layout-grid" aria-label="畑レイアウト 4×4">
-          ${layoutV2.cells.map((cell) => layoutCellHtml(cell)).join("")}
-        </div>
-        ${selectedLayoutGroupCreateHtml()}
-        ${layoutGroupListHtml()}
-      </section>
-    `;
   }
 
   function sortWorkRecordsByDate(records) {
@@ -376,7 +138,6 @@
     const plotName = plot ? plot.name : "削除済みの区画";
     const cropName = plot ? plot.cropName : "作物未設定";
     const photoIds = workRecordPhotoIds(record);
-    const recordId = escapeHtml(record.id);
 
     return `
       <article class="card work-record-card">
@@ -390,10 +151,6 @@
         <p class="work-plot">${escapeHtml(cropName)}</p>
         <p class="work-memo">${escapeHtml(record.memo || "メモはありません。")}</p>
         ${photoStripHtml(photoIds)}
-        <div class="card-actions">
-          <button class="btn btn--compact" type="button" data-action="edit-work-record" data-id="${recordId}">編集</button>
-          <button class="btn btn--compact btn--danger" type="button" data-action="delete-work-record" data-id="${recordId}">削除</button>
-        </div>
       </article>
     `;
   }
@@ -439,7 +196,6 @@
     const showPlot = options.showPlot !== false;
     const showMemo = options.showMemo !== false;
     const showCheckbox = options.showCheckbox !== false;
-    const showActions = options.showActions !== false;
     const scheduleId = escapeHtml(schedule.id);
     const checkboxId = `schedule-done-${scheduleId}`;
 
@@ -464,16 +220,6 @@
             `
             : ""
         }
-        ${
-          showActions
-            ? `
-              <div class="card-actions">
-                <button class="btn btn--compact" type="button" data-action="edit-schedule" data-id="${scheduleId}">編集</button>
-                <button class="btn btn--compact btn--danger" type="button" data-action="delete-schedule" data-id="${scheduleId}">削除</button>
-              </div>
-            `
-            : ""
-        }
       </article>
     `;
   }
@@ -488,683 +234,6 @@
     }
 
     return `<div class="schedule-list">${items.map((schedule) => scheduleCardHtml(schedule, options)).join("")}</div>`;
-  }
-
-  function dateValueToDate(value) {
-    if (!value) {
-      return null;
-    }
-
-    const date = new Date(`${value}T00:00:00`);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  function dateToDateValue(date) {
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-
-    return `${date.getFullYear()}-${month}-${day}`;
-  }
-
-  function addDaysToDateValue(value, days) {
-    const date = dateValueToDate(value);
-
-    if (!date) {
-      return "";
-    }
-
-    date.setDate(date.getDate() + days);
-    return dateToDateValue(date);
-  }
-
-  function daysUntilDateValue(value) {
-    const date = dateValueToDate(value);
-    const today = dateValueToDate(todayValue());
-
-    if (!date || !today) {
-      return null;
-    }
-
-    return Math.ceil((date.getTime() - today.getTime()) / 86400000);
-  }
-
-  function addMonths(date, months) {
-    return new Date(date.getFullYear(), date.getMonth() + months, 1);
-  }
-
-  function monthEndDate(date) {
-    return new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  }
-
-  function timelineMonths() {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    return Array.from({ length: 12 }, (_, index) => addMonths(start, index));
-  }
-
-  function formatMonthLabel(date) {
-    return `${date.getFullYear()}年${date.getMonth() + 1}月`;
-  }
-
-  function cropPlanOverlapsMonth(plan, monthDate) {
-    const startDate = dateValueToDate(plan.startDate);
-    const endDate = dateValueToDate(plan.endDate) || startDate;
-
-    if (!startDate || !endDate) {
-      return false;
-    }
-
-    const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-    const monthEnd = monthEndDate(monthDate);
-
-    return startDate <= monthEnd && endDate >= monthStart;
-  }
-
-  function cropPlanPrepDays(plan) {
-    const number = Number(plan?.prepDaysBeforeStart || 0);
-
-    if (!Number.isFinite(number) || number < 0) {
-      return 0;
-    }
-
-    return Math.floor(number);
-  }
-
-  function cropPlanPrepRange(plan) {
-    const prepDays = cropPlanPrepDays(plan);
-
-    if (!plan?.startDate || prepDays <= 0) {
-      return null;
-    }
-
-    return {
-      startDate: addDaysToDateValue(plan.startDate, -prepDays),
-      endDate: addDaysToDateValue(plan.startDate, -1),
-      prepDays
-    };
-  }
-
-  function cropPlanPrepOverlapsMonth(plan, monthDate) {
-    const range = cropPlanPrepRange(plan);
-
-    if (!range) {
-      return false;
-    }
-
-    const startDate = dateValueToDate(range.startDate);
-    const endDate = dateValueToDate(range.endDate);
-
-    if (!startDate || !endDate) {
-      return false;
-    }
-
-    const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-    const monthEnd = monthEndDate(monthDate);
-
-    return startDate <= monthEnd && endDate >= monthStart;
-  }
-
-  function dateValueInMonth(value, monthDate) {
-    const date = dateValueToDate(value);
-
-    if (!date) {
-      return false;
-    }
-
-    return date.getFullYear() === monthDate.getFullYear() && date.getMonth() === monthDate.getMonth();
-  }
-
-  function cropPlansForPlot(plotId) {
-    return sortCropPlansForList(cropPlans.filter((plan) => plan.plotId === plotId));
-  }
-
-  function currentCropPlanForPlot(plotId) {
-    const today = todayValue();
-    const currentPlans = cropPlansForPlot(plotId).filter((plan) => (
-      plan.startDate
-      && plan.startDate <= today
-      && (!plan.endDate || plan.endDate >= today)
-    ));
-
-    return currentPlans.find((plan) => plan.status === HatakeData.CROP_PLAN_STATUSES[1])
-      || currentPlans[currentPlans.length - 1]
-      || null;
-  }
-
-  function nextCropPlanForPlot(plotId, currentPlan = null) {
-    const boundaryDate = currentPlan?.startDate || todayValue();
-
-    return cropPlansForPlot(plotId).find((plan) => (
-      plan.id !== currentPlan?.id
-      && plan.startDate
-      && plan.startDate > boundaryDate
-    )) || null;
-  }
-
-  function cropPlanRemovalDeadline(currentPlan, nextPlan) {
-    if (!currentPlan || !nextPlan?.startDate) {
-      return "";
-    }
-
-    return addDaysToDateValue(nextPlan.startDate, -cropPlanPrepDays(nextPlan));
-  }
-
-  function cropCycleForPlot(plotId) {
-    const plot = findPlot(plotId);
-    const currentPlan = currentCropPlanForPlot(plotId);
-    const nextPlan = nextCropPlanForPlot(plotId, currentPlan);
-    const removalDeadline = cropPlanRemovalDeadline(currentPlan, nextPlan);
-
-    return {
-      plot,
-      currentPlan,
-      nextPlan,
-      removalDeadline,
-      prepDays: cropPlanPrepDays(nextPlan)
-    };
-  }
-
-  function removalDeadlineEntries() {
-    return plots
-      .map((plot) => cropCycleForPlot(plot.id))
-      .filter((cycle) => cycle.currentPlan && cycle.nextPlan && cycle.removalDeadline)
-      .sort((a, b) => String(a.removalDeadline).localeCompare(String(b.removalDeadline)));
-  }
-
-  function removalDeadlineStatusText(deadline) {
-    const days = daysUntilDateValue(deadline);
-
-    if (days == null) {
-      return "";
-    }
-
-    if (days < 0) {
-      return "期限超過";
-    }
-
-    if (days === 0) {
-      return "今日まで";
-    }
-
-    return `${days}日後`;
-  }
-
-  function timelineRemovalEntriesForPlot(plotId) {
-    const plans = cropPlansForPlot(plotId);
-
-    return plans
-      .map((plan, index) => {
-        const nextPlan = plans[index + 1];
-        const removalDeadline = cropPlanRemovalDeadline(plan, nextPlan);
-
-        return nextPlan && removalDeadline
-          ? { currentPlan: plan, nextPlan, removalDeadline }
-          : null;
-      })
-      .filter(Boolean);
-  }
-
-  function sortCropPlansForList(items) {
-    return [...items].sort((a, b) => {
-      const dateCompare = String(a.startDate || "9999-99-99").localeCompare(String(b.startDate || "9999-99-99"));
-
-      if (dateCompare !== 0) {
-        return dateCompare;
-      }
-
-      const plotA = findPlot(a.plotId);
-      const plotB = findPlot(b.plotId);
-      return String(plotA?.name || "").localeCompare(String(plotB?.name || ""), "ja");
-    });
-  }
-
-  function upcomingCropPlans() {
-    const today = todayValue();
-    return sortCropPlansForList(cropPlans.filter((plan) => String(plan.startDate || "") >= today));
-  }
-
-  function cropPlanStatusOptions(selectedStatus) {
-    return HatakeData.CROP_PLAN_STATUSES.map((status) => {
-      const selected = status === selectedStatus ? "selected" : "";
-      return `<option value="${escapeHtml(status)}" ${selected}>${escapeHtml(status)}</option>`;
-    }).join("");
-  }
-
-  function cropPlanCardHtml(plan, options = {}) {
-    const plot = findPlot(plan.plotId);
-    const plotName = plot ? plot.name : "削除済みの区画";
-    const showActions = options.showActions !== false;
-    const planId = escapeHtml(plan.id);
-    const prepDays = cropPlanPrepDays(plan);
-    const hasCycleMeta = Boolean(plan.plantingMethod || prepDays);
-
-    return `
-      <article class="card crop-plan-card">
-        <div class="crop-plan-card__top">
-          <div>
-            <p class="crop-plan-plot">${escapeHtml(plotName)}</p>
-            <p class="crop-plan-title">${escapeHtml(plan.cropName || "作物未設定")}</p>
-          </div>
-          <span class="status-badge" data-plan-status="${escapeHtml(plan.status)}">${escapeHtml(plan.status)}</span>
-        </div>
-        <div class="meta-grid">
-          <div class="meta-item">
-            <span class="meta-label">開始日</span>
-            <span class="meta-value">${escapeHtml(formatDate(plan.startDate))}</span>
-          </div>
-          <div class="meta-item">
-            <span class="meta-label">終了予定日</span>
-            <span class="meta-value">${escapeHtml(formatDate(plan.endDate))}</span>
-          </div>
-        </div>
-        ${
-          hasCycleMeta
-            ? `
-              <div class="crop-plan-extra">
-                ${plan.plantingMethod ? `<span>植え方：${escapeHtml(plan.plantingMethod)}</span>` : ""}
-                ${prepDays ? `<span>準備：開始${escapeHtml(prepDays)}日前</span>` : ""}
-              </div>
-            `
-            : ""
-        }
-        <p class="crop-plan-memo">${escapeHtml(plan.memo || "メモはありません。")}</p>
-        ${
-          showActions
-            ? `
-              <div class="card-actions">
-                <button class="btn btn--compact" type="button" data-action="edit-crop-plan" data-id="${planId}">編集</button>
-                <button class="btn btn--compact btn--danger" type="button" data-action="delete-crop-plan" data-id="${planId}">削除</button>
-              </div>
-            `
-            : ""
-        }
-      </article>
-    `;
-  }
-
-  function cropPlanListHtml(items, emptyMessage, options = {}) {
-    if (!items.length) {
-      return `
-        <div class="panel panel--empty">
-          <p class="empty-text">${escapeHtml(emptyMessage)}</p>
-        </div>
-      `;
-    }
-
-    return `<div class="crop-plan-list">${items.map((plan) => cropPlanCardHtml(plan, options)).join("")}</div>`;
-  }
-
-  function removalDeadlineListHtml(items) {
-    if (!items.length) {
-      return `
-        <div class="panel panel--empty">
-          <p class="empty-text">撤去期限が近い区画はまだありません。</p>
-        </div>
-      `;
-    }
-
-    return `
-      <div class="deadline-list">
-        ${items.map((item) => `
-          <article class="card deadline-card">
-            <div>
-              <p class="crop-plan-plot">${escapeHtml(item.plot?.name || "区画未設定")}</p>
-              <h3>${escapeHtml(item.currentPlan.cropName)} → ${escapeHtml(item.nextPlan.cropName)}</h3>
-              <p class="memo-text">次作の開始：${escapeHtml(formatDate(item.nextPlan.startDate))}</p>
-            </div>
-            <div class="deadline-card__date">
-              <span>撤去期限</span>
-              <strong>${escapeHtml(formatDate(item.removalDeadline))}</strong>
-              <small>${escapeHtml(removalDeadlineStatusText(item.removalDeadline))}</small>
-            </div>
-          </article>
-        `).join("")}
-      </div>
-    `;
-  }
-
-  function cropCycleHtml(plotId) {
-    const cycle = cropCycleForPlot(plotId);
-    const currentText = cycle.currentPlan
-      ? `${cycle.currentPlan.cropName}（${formatDate(cycle.currentPlan.startDate)}〜${formatDate(cycle.currentPlan.endDate)}）`
-      : "現在の栽培計画はありません。";
-    const nextText = cycle.nextPlan
-      ? `${cycle.nextPlan.cropName}（${formatDate(cycle.nextPlan.startDate)}開始）`
-      : "次の栽培計画はありません。";
-
-    return `
-      <div class="cycle-grid">
-        <div class="panel cycle-panel">
-          <span class="cycle-label">現在の作物</span>
-          <strong>${escapeHtml(currentText)}</strong>
-        </div>
-        <div class="panel cycle-panel">
-          <span class="cycle-label">次の作物</span>
-          <strong>${escapeHtml(nextText)}</strong>
-          ${
-            cycle.nextPlan?.plantingMethod
-              ? `<p class="memo-text">植え方：${escapeHtml(cycle.nextPlan.plantingMethod)}</p>`
-              : ""
-          }
-        </div>
-        <div class="panel cycle-panel">
-          <span class="cycle-label">撤去期限</span>
-          <strong>${cycle.removalDeadline ? escapeHtml(formatDate(cycle.removalDeadline)) : "未計算"}</strong>
-          ${
-            cycle.removalDeadline
-              ? `<p class="memo-text">${escapeHtml(removalDeadlineStatusText(cycle.removalDeadline))}</p>`
-              : `<p class="memo-text">現在の作物と次の作物がある場合に自動計算します。</p>`
-          }
-        </div>
-        <div class="panel cycle-panel">
-          <span class="cycle-label">準備期間</span>
-          <strong>${escapeHtml(cycle.prepDays)}日前</strong>
-          <p class="memo-text">次の作物の開始日から逆算します。</p>
-        </div>
-      </div>
-    `;
-  }
-
-  function cropTimelineHtml() {
-    if (!plots.length) {
-      return `
-        <div class="panel panel--empty">
-          <p class="empty-text">タイムラインを表示するには、先に区画を追加してください。</p>
-        </div>
-      `;
-    }
-
-    const months = timelineMonths();
-    const sortedPlans = sortCropPlansForList(cropPlans);
-
-    return `
-      <div class="timeline-scroll" role="region" aria-label="栽培計画 月別タイムライン" tabindex="0">
-        <div class="crop-timeline" aria-label="今月から12か月分の栽培計画">
-          <div class="timeline-cell timeline-cell--head timeline-cell--plot">区画</div>
-          ${months.map((month) => `<div class="timeline-cell timeline-cell--head">${escapeHtml(formatMonthLabel(month))}</div>`).join("")}
-          ${plots.map((plot) => `
-            <div class="timeline-cell timeline-cell--plot">
-              <span class="timeline-plot-name">${escapeHtml(plot.name)}</span>
-              <span class="timeline-plot-crop">${escapeHtml(plot.cropName || "作物未設定")}</span>
-            </div>
-            ${months.map((month) => {
-              const plansInMonth = sortedPlans.filter((plan) => plan.plotId === plot.id && cropPlanOverlapsMonth(plan, month));
-              const prepPlansInMonth = sortedPlans.filter((plan) => plan.plotId === plot.id && cropPlanPrepOverlapsMonth(plan, month));
-              const removalEntriesInMonth = timelineRemovalEntriesForPlot(plot.id).filter((entry) => dateValueInMonth(entry.removalDeadline, month));
-              const hasTimelineItems = plansInMonth.length || prepPlansInMonth.length || removalEntriesInMonth.length;
-
-              if (!hasTimelineItems) {
-                return `<div class="timeline-cell timeline-cell--empty">空き</div>`;
-              }
-
-              return `
-                <div class="timeline-cell">
-                  ${plansInMonth.map((plan) => `<span class="timeline-crop" data-plan-status="${escapeHtml(plan.status)}">${escapeHtml(plan.cropName)}</span>`).join("")}
-                  ${prepPlansInMonth.map((plan) => `<span class="timeline-crop timeline-crop--prep">準備：${escapeHtml(plan.cropName)}</span>`).join("")}
-                  ${removalEntriesInMonth.map((entry) => `<span class="timeline-crop timeline-crop--deadline">撤去：${escapeHtml(entry.currentPlan.cropName)} ${escapeHtml(formatDate(entry.removalDeadline))}</span>`).join("")}
-                </div>
-              `;
-            }).join("")}
-          `).join("")}
-        </div>
-      </div>
-    `;
-  }
-
-  function cloneForBackup(value) {
-    return JSON.parse(JSON.stringify(value || []));
-  }
-
-  function readFileAsText(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error || new Error("ファイルの読み込みに失敗しました。"));
-      reader.readAsText(file);
-    });
-  }
-
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error || new Error("写真データの変換に失敗しました。"));
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  async function dataUrlToBlob(dataUrl) {
-    const response = await fetch(dataUrl);
-
-    if (!response.ok) {
-      throw new Error("写真データの読み込みに失敗しました。");
-    }
-
-    return response.blob();
-  }
-
-  function backupFileName(date = new Date()) {
-    const year = String(date.getFullYear());
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    const hour = String(date.getHours()).padStart(2, "0");
-    const minute = String(date.getMinutes()).padStart(2, "0");
-
-    return `hatake-note-backup-${year}${month}${day}-${hour}${minute}.json`;
-  }
-
-  async function buildBackupPayload() {
-    const photos = await HatakeData.getAllPhotos();
-    const backupPhotos = await Promise.all(photos.map(async (photo) => ({
-      id: photo.id,
-      workRecordId: photo.workRecordId,
-      plotId: photo.plotId,
-      createdAt: photo.createdAt,
-      mimeType: photo.blob?.type || "image/jpeg",
-      dataUrl: await blobToDataUrl(photo.blob)
-    })));
-
-    return {
-      appName: "hatake-note-local",
-      backupVersion: 1,
-      appVersion: "1.4-prototype1",
-      exportedAt: new Date().toISOString(),
-      data: {
-        plots: cloneForBackup(plots),
-        workRecords: cloneForBackup(workRecords),
-        schedules: cloneForBackup(schedules),
-        layout: cloneForBackup(layout),
-        layoutV2: cloneForBackup(layoutV2),
-        cropPlans: cloneForBackup(cropPlans)
-      },
-      photos: backupPhotos
-    };
-  }
-
-  function downloadJsonBackup(backup) {
-    const json = JSON.stringify(backup, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-
-    link.href = url;
-    link.download = backupFileName();
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  function ensureBackupArray(value, label) {
-    if (!Array.isArray(value)) {
-      throw new Error(`${label} の形式が正しくありません。`);
-    }
-
-    return value;
-  }
-
-  function validateBackupPayload(value) {
-    if (!value || typeof value !== "object" || value.appName !== "hatake-note-local") {
-      throw new Error("畑ノートのバックアップファイルではありません。");
-    }
-
-    if (!value.data || typeof value.data !== "object") {
-      throw new Error("バックアップ内のデータが見つかりません。");
-    }
-
-    const data = {
-      plots: ensureBackupArray(value.data.plots, "区画データ"),
-      workRecords: ensureBackupArray(value.data.workRecords, "作業記録"),
-      schedules: ensureBackupArray(value.data.schedules, "育成スケジュール"),
-      layout: ensureBackupArray(value.data.layout, "畑レイアウト"),
-      layoutV2: value.data.layoutV2
-        ? HatakeData.normalizeLayoutV2(value.data.layoutV2, value.data.layout)
-        : HatakeData.createLayoutV2FromLayout(value.data.layout),
-      cropPlans: ensureBackupArray(value.data.cropPlans, "栽培計画")
-    };
-    const photos = value.photos == null ? [] : ensureBackupArray(value.photos, "写真データ");
-
-    return {
-      appName: value.appName,
-      backupVersion: Number(value.backupVersion || 1),
-      appVersion: String(value.appVersion || ""),
-      exportedAt: String(value.exportedAt || ""),
-      data,
-      photos
-    };
-  }
-
-  function backupSummary(backup) {
-    return {
-      plots: backup.data.plots.length,
-      workRecords: backup.data.workRecords.length,
-      schedules: backup.data.schedules.length,
-      layout: backup.data.layout.length,
-      layoutV2: backup.data.layoutV2?.cells?.length || 0,
-      layoutGroups: backup.data.layoutV2?.groups?.length || 0,
-      cropPlans: backup.data.cropPlans.length,
-      photos: backup.photos.length
-    };
-  }
-
-  function backupSummaryHtml(summary) {
-    if (!summary) {
-      return "";
-    }
-
-    return `
-      <div class="panel backup-summary">
-        <h3>読み込み内容</h3>
-        <ul>
-          <li>区画：${escapeHtml(summary.plots)}件</li>
-          <li>作業記録：${escapeHtml(summary.workRecords)}件</li>
-          <li>育成スケジュール：${escapeHtml(summary.schedules)}件</li>
-          <li>畑レイアウト：${escapeHtml(summary.layout)}マス</li>
-          <li>自由レイアウト：${escapeHtml(summary.layoutV2)}マス / ${escapeHtml(summary.layoutGroups)}グループ</li>
-          <li>栽培計画：${escapeHtml(summary.cropPlans)}件</li>
-          <li>写真：${escapeHtml(summary.photos)}枚</li>
-        </ul>
-        <button class="btn btn--danger" type="button" data-action="restore-backup">この内容で上書き復元する</button>
-      </div>
-    `;
-  }
-
-  async function backupPhotoToRecord(photo) {
-    if (!photo || !photo.id || !photo.workRecordId || !photo.plotId) {
-      throw new Error("写真データの形式が正しくありません。");
-    }
-
-    const mimeType = String(photo.mimeType || "image/jpeg");
-    const dataUrl = photo.dataUrl || (photo.base64 ? `data:${mimeType};base64,${photo.base64}` : "");
-
-    if (!dataUrl) {
-      throw new Error("写真データが見つかりません。");
-    }
-
-    return {
-      id: String(photo.id),
-      workRecordId: String(photo.workRecordId),
-      plotId: String(photo.plotId),
-      blob: await dataUrlToBlob(dataUrl),
-      createdAt: String(photo.createdAt || new Date().toISOString())
-    };
-  }
-
-  async function exportBackup() {
-    try {
-      const backup = await buildBackupPayload();
-      downloadJsonBackup(backup);
-      setFlashMessage("バックアップを書き出しました。");
-    } catch (error) {
-      console.error("バックアップの書き出しに失敗しました。", error);
-      setFlashMessage("バックアップの書き出しに失敗しました。IndexedDBの写真データを読み込めない可能性があります。");
-    }
-
-    renderBackup();
-  }
-
-  async function prepareBackupRestore(file) {
-    if (!file) {
-      return;
-    }
-
-    try {
-      const text = await readFileAsText(file);
-      const parsed = JSON.parse(text);
-      pendingBackup = validateBackupPayload(parsed);
-      pendingBackupSummary = backupSummary(pendingBackup);
-      setFlashMessage("バックアップファイルを読み込みました。件数を確認してください。");
-    } catch (error) {
-      console.error("バックアップファイルの読み込みに失敗しました。", error);
-      pendingBackup = null;
-      pendingBackupSummary = null;
-      setFlashMessage(error.message || "畑ノートのバックアップファイルではありません。");
-    }
-
-    renderBackup();
-  }
-
-  async function restoreBackup() {
-    if (!pendingBackup) {
-      setFlashMessage("復元するバックアップファイルを先に選択してください。");
-      renderBackup();
-      return;
-    }
-
-    if (!confirm("現在のデータをバックアップファイルの内容で上書き復元します。よろしいですか？")) {
-      return;
-    }
-
-    try {
-      const restoredPhotos = await Promise.all(pendingBackup.photos.map(backupPhotoToRecord));
-
-      await HatakeData.replacePhotos(restoredPhotos);
-      HatakeData.savePlots(pendingBackup.data.plots);
-      HatakeData.saveWorkRecords(pendingBackup.data.workRecords);
-      HatakeData.saveSchedules(pendingBackup.data.schedules);
-      HatakeData.saveLayout(pendingBackup.data.layout);
-      HatakeData.saveLayoutV2(pendingBackup.data.layoutV2);
-      HatakeData.saveCropPlans(pendingBackup.data.cropPlans);
-
-      plots = HatakeData.loadPlots();
-      workRecords = HatakeData.loadWorkRecords();
-      schedules = HatakeData.loadSchedules();
-      layout = HatakeData.loadLayout(plots);
-      layoutV2 = HatakeData.loadLayoutV2(plots);
-      cropPlans = HatakeData.loadCropPlans();
-      pendingBackup = null;
-      pendingBackupSummary = null;
-      setFlashMessage("復元が完了しました。");
-      setRoute("home");
-      render();
-    } catch (error) {
-      console.error("バックアップの復元に失敗しました。", error);
-      setFlashMessage("復元に失敗しました。バックアップファイルの写真データまたはIndexedDBを確認してください。");
-      renderBackup();
-    }
   }
 
   async function hydratePhotoStrips() {
@@ -1235,7 +304,6 @@
             <div>
               <p class="work-date">${escapeHtml(recordDate)}</p>
               <p class="work-type">${escapeHtml(workType)}</p>
-              <button class="btn btn--compact btn--danger" type="button" data-action="delete-photo" data-id="${escapeHtml(photo.id)}">写真を削除</button>
             </div>
           </article>
         `;
@@ -1306,8 +374,6 @@
     const recentPlots = plots.slice(0, 3);
     const recentWorkRecords = sortWorkRecordsByDate(workRecords).slice(0, 5);
     const upcomingSchedules = sortUpcomingSchedules(schedules).slice(0, 5);
-    const upcomingPlans = upcomingCropPlans().slice(0, 3);
-    const upcomingRemovalDeadlines = removalDeadlineEntries().slice(0, 5);
 
     app.innerHTML = `
       <section class="view">
@@ -1319,26 +385,9 @@
             <button class="btn btn--primary" type="button" data-action="go-plots">区画一覧を見る</button>
             <button class="btn" type="button" data-action="go-work-new">作業記録を追加する</button>
             <button class="btn" type="button" data-action="go-schedule-new">予定を追加する</button>
-            <button class="btn" type="button" data-action="go-crop-plans">栽培計画を見る</button>
-            <button class="btn" type="button" data-action="go-backup">バックアップ</button>
             <button class="btn btn--subtle" type="button" data-action="go-new">区画を追加する</button>
           </div>
         </div>
-
-        ${layoutGridHtml()}
-
-        <section class="section" aria-labelledby="home-removal-deadline-title">
-          <h2 id="home-removal-deadline-title">撤去期限が近い区画</h2>
-          ${removalDeadlineListHtml(upcomingRemovalDeadlines)}
-        </section>
-
-        <section class="section" aria-labelledby="home-crop-plan-title">
-          <div class="section-header">
-            <h2 id="home-crop-plan-title">今後の栽培計画</h2>
-            <button class="btn btn--compact" type="button" data-action="go-crop-plan-new">計画を追加</button>
-          </div>
-          ${cropPlanListHtml(upcomingPlans, "今日以降に開始する栽培計画はまだありません。", { showActions: false })}
-        </section>
 
         <section class="section" aria-labelledby="home-plots-title">
           <h2 id="home-plots-title">登録中の区画</h2>
@@ -1356,7 +405,7 @@
 
         <section class="section" aria-labelledby="home-plan-title">
           <h2 id="home-plan-title">今日・近日中にやる予定</h2>
-          ${scheduleListHtml(upcomingSchedules, "未完了の予定はまだありません。予定画面から追加できます。", { showMemo: false, showCheckbox: false, showActions: false })}
+          ${scheduleListHtml(upcomingSchedules, "未完了の予定はまだありません。予定画面から追加できます。", { showMemo: false, showCheckbox: false })}
         </section>
       </section>
     `;
@@ -1436,11 +485,6 @@
           ${detailItem("収穫予定日", formatDate(plot.harvestDate))}
           ${detailItem("メモ", plot.memo || "メモはまだありません。")}
         </div>
-
-        <section class="section" aria-labelledby="detail-crop-cycle-title">
-          <h2 id="detail-crop-cycle-title">作付けサイクル</h2>
-          ${cropCycleHtml(plot.id)}
-        </section>
 
         <section class="section" aria-labelledby="detail-work-title">
           <h2 id="detail-work-title">最近の作業記録</h2>
@@ -1555,23 +599,8 @@
     }
   }
 
-  function renderWorkRecordForm(workRecordId) {
+  function renderWorkRecordForm() {
     clearSelectedPhotos();
-    const isEdit = Boolean(workRecordId);
-    const record = isEdit ? findWorkRecord(workRecordId) : null;
-
-    if (isEdit && !record) {
-      app.innerHTML = `
-        <section class="view">
-          <div class="panel panel--empty">
-            <h2>作業記録が見つかりません</h2>
-            <p class="empty-text">保存済みデータから対象の作業記録を見つけられませんでした。</p>
-          </div>
-          <button class="btn btn--primary" type="button" data-action="go-home">ホームへ戻る</button>
-        </section>
-      `;
-      return;
-    }
 
     if (!plots.length) {
       app.innerHTML = `
@@ -1586,67 +615,50 @@
       return;
     }
 
-    const selectedPlotId = record ? record.plotId : plots[0].id;
-    const selectedWorkType = record ? record.workType : "水やり";
-
     app.innerHTML = `
       <section class="view">
         <div>
-          <h2>${isEdit ? "作業記録を編集" : "作業記録を追加"}</h2>
-          <p class="empty-text">${isEdit ? "日付、区画、作業内容、メモを修正できます。既存写真は維持されます。" : "作業した区画を選んで、日付と内容を記録します。"}</p>
+          <h2>作業記録を追加</h2>
+          <p class="empty-text">作業した区画を選んで、日付と内容を記録します。</p>
         </div>
 
         <form class="form" id="work-form" novalidate>
-          <input type="hidden" name="id" value="${escapeHtml(record ? record.id : "")}">
-
           <div class="field">
             <label for="work-date">日付</label>
-            <input id="work-date" name="date" type="date" value="${escapeHtml(record ? record.date : todayValue())}" required>
+            <input id="work-date" name="date" type="date" value="${escapeHtml(todayValue())}" required>
           </div>
 
           <div class="field">
             <label for="work-plot">区画</label>
             <select id="work-plot" name="plotId" required>
-              ${plotOptions(selectedPlotId)}
+              ${plotOptions(plots[0].id)}
             </select>
           </div>
 
           <div class="field">
             <label for="work-type">作業内容</label>
             <select id="work-type" name="workType" required>
-              ${workTypeOptions(selectedWorkType)}
+              ${workTypeOptions("水やり")}
             </select>
           </div>
 
           <div class="field">
             <label for="work-memo">メモ</label>
-            <textarea id="work-memo" name="memo" maxlength="500" placeholder="作業した量、気づいたこと、次に見ることなど">${escapeHtml(record ? record.memo : "")}</textarea>
+            <textarea id="work-memo" name="memo" maxlength="500" placeholder="作業した量、気づいたこと、次に見ることなど"></textarea>
             <p class="form-help">500文字まで保存できます。</p>
           </div>
 
-          ${
-            isEdit
-              ? `
-                <div class="panel panel--empty">
-                  <h3>写真</h3>
-                  <p class="empty-text">既存写真は維持されます。写真の追加は今回は未対応です。</p>
-                  ${photoStripHtml(workRecordPhotoIds(record))}
-                </div>
-              `
-              : `
-                <div class="field">
-                  <label for="work-photos">写真</label>
-                  <input id="work-photos" name="photos" type="file" accept="image/*" multiple>
-                  <p class="form-help">1つの作業記録につき最大3枚まで保存できます。保存前に縮小します。</p>
-                  <div class="form-message" id="photo-message" aria-live="polite"></div>
-                  <div class="photo-preview-grid" id="photo-preview"></div>
-                </div>
-              `
-          }
+          <div class="field">
+            <label for="work-photos">写真</label>
+            <input id="work-photos" name="photos" type="file" accept="image/*" multiple>
+            <p class="form-help">1つの作業記録につき最大3枚まで保存できます。保存前に縮小します。</p>
+            <div class="form-message" id="photo-message" aria-live="polite"></div>
+            <div class="photo-preview-grid" id="photo-preview"></div>
+          </div>
 
           <div class="button-row">
             <button class="btn btn--primary" type="button" data-action="save-work-record">保存する</button>
-            <button class="btn" type="button" data-action="${isEdit ? "open-plot" : "go-home"}" ${isEdit ? `data-id="${escapeHtml(selectedPlotId)}"` : ""}>キャンセル</button>
+            <button class="btn" type="button" data-action="go-home">キャンセル</button>
           </div>
         </form>
       </section>
@@ -1655,10 +667,6 @@
     const firstInput = app.querySelector("#work-date");
     if (firstInput) {
       firstInput.focus();
-    }
-
-    if (isEdit) {
-      hydratePhotoElements();
     }
   }
 
@@ -1778,39 +786,19 @@
 
     app.innerHTML = `
       <section class="view">
-        ${flashMessageHtml()}
         <div class="detail-header">
           <div>
             <h2>育成スケジュール</h2>
             <p class="empty-text">${schedules.length}件の予定があります。</p>
           </div>
         </div>
-        <div class="button-row">
-          <button class="btn btn--primary" type="button" data-action="go-schedule-new">予定を追加する</button>
-          <button class="btn" type="button" data-action="go-crop-plans">栽培計画を見る</button>
-        </div>
+        <button class="btn btn--primary" type="button" data-action="go-schedule-new">予定を追加する</button>
         ${scheduleListHtml(sortedSchedules, "まだ予定がありません。予定を追加するとここに表示されます。")}
       </section>
     `;
   }
 
-  function renderScheduleForm(scheduleId) {
-    const isEdit = Boolean(scheduleId);
-    const schedule = isEdit ? findSchedule(scheduleId) : null;
-
-    if (isEdit && !schedule) {
-      app.innerHTML = `
-        <section class="view">
-          <div class="panel panel--empty">
-            <h2>予定が見つかりません</h2>
-            <p class="empty-text">保存済みデータから対象の予定を見つけられませんでした。</p>
-          </div>
-          <button class="btn btn--primary" type="button" data-action="go-schedules">予定一覧へ戻る</button>
-        </section>
-      `;
-      return;
-    }
-
+  function renderScheduleForm() {
     if (!plots.length) {
       app.innerHTML = `
         <section class="view">
@@ -1827,40 +815,33 @@
     app.innerHTML = `
       <section class="view">
         <div>
-          <h2>${isEdit ? "予定を編集" : "予定を追加"}</h2>
-          <p class="empty-text">${isEdit ? "区画、作業予定名、予定日、メモ、完了状態を修正できます。" : "区画ごとの次にやる作業を予定として登録します。"}</p>
+          <h2>予定を追加</h2>
+          <p class="empty-text">区画ごとの次にやる作業を予定として登録します。</p>
         </div>
 
         <form class="form" id="schedule-form" novalidate>
-          <input type="hidden" name="id" value="${escapeHtml(schedule ? schedule.id : "")}">
-
           <div class="field">
             <label for="schedule-plot">区画</label>
             <select id="schedule-plot" name="plotId" required>
-              ${plotOptions(schedule ? schedule.plotId : plots[0].id)}
+              ${plotOptions(plots[0].id)}
             </select>
           </div>
 
           <div class="field">
             <label for="schedule-title">作業予定名</label>
-            <input id="schedule-title" name="title" type="text" required maxlength="60" autocomplete="off" placeholder="例：つる返し" value="${escapeHtml(schedule ? schedule.title : "")}">
+            <input id="schedule-title" name="title" type="text" required maxlength="60" autocomplete="off" placeholder="例：つる返し">
           </div>
 
           <div class="field">
             <label for="schedule-date">予定日</label>
-            <input id="schedule-date" name="date" type="date" value="${escapeHtml(schedule ? schedule.date : todayValue())}" required>
+            <input id="schedule-date" name="date" type="date" value="${escapeHtml(todayValue())}" required>
           </div>
 
           <div class="field">
             <label for="schedule-memo">メモ</label>
-            <textarea id="schedule-memo" name="memo" maxlength="500" placeholder="作業の目安、見るポイント、必要な道具など">${escapeHtml(schedule ? schedule.memo : "")}</textarea>
+            <textarea id="schedule-memo" name="memo" maxlength="500" placeholder="作業の目安、見るポイント、必要な道具など"></textarea>
             <p class="form-help">500文字まで保存できます。</p>
           </div>
-
-          <label class="schedule-check">
-            <input class="schedule-checkbox" name="done" type="checkbox" ${schedule && schedule.done ? "checked" : ""}>
-            <span>完了済みにする</span>
-          </label>
 
           <div class="button-row">
             <button class="btn btn--primary" type="button" data-action="save-schedule">保存する</button>
@@ -1874,178 +855,6 @@
     if (firstInput) {
       firstInput.focus();
     }
-  }
-
-  function renderCropPlanList() {
-    const sortedPlans = sortCropPlansForList(cropPlans);
-
-    app.innerHTML = `
-      <section class="view">
-        ${flashMessageHtml()}
-        <div class="detail-header">
-          <div>
-            <h2>栽培計画</h2>
-            <p class="empty-text">区画ごとの作付け予定を月別に確認できます。</p>
-          </div>
-        </div>
-        <div class="button-row">
-          <button class="btn btn--primary" type="button" data-action="go-crop-plan-new">栽培計画を追加する</button>
-          <button class="btn" type="button" data-action="go-home">ホームへ戻る</button>
-        </div>
-
-        <section class="section" aria-labelledby="crop-timeline-title">
-          <h2 id="crop-timeline-title">月別タイムライン</h2>
-          <p class="empty-text">今月から12か月分を横スクロールで表示します。</p>
-          ${cropTimelineHtml()}
-        </section>
-
-        <section class="section" aria-labelledby="crop-plan-list-title">
-          <h2 id="crop-plan-list-title">栽培計画一覧</h2>
-          ${cropPlanListHtml(sortedPlans, "まだ栽培計画がありません。追加するとここに表示されます。")}
-        </section>
-      </section>
-    `;
-  }
-
-  function renderCropPlanForm(cropPlanId) {
-    const isEdit = Boolean(cropPlanId);
-    const plan = isEdit ? findCropPlan(cropPlanId) : null;
-
-    if (isEdit && !plan) {
-      app.innerHTML = `
-        <section class="view">
-          <div class="panel panel--empty">
-            <h2>栽培計画が見つかりません</h2>
-            <p class="empty-text">保存済みデータから対象の栽培計画を見つけられませんでした。</p>
-          </div>
-          <button class="btn btn--primary" type="button" data-action="go-crop-plans">栽培計画へ戻る</button>
-        </section>
-      `;
-      return;
-    }
-
-    if (!plots.length) {
-      app.innerHTML = `
-        <section class="view">
-          <div class="panel panel--empty">
-            <h2>栽培計画を追加</h2>
-            <p class="empty-text">栽培計画は区画に紐づけて保存します。先に区画を追加してください。</p>
-          </div>
-          <button class="btn btn--primary" type="button" data-action="go-new">区画を追加する</button>
-        </section>
-      `;
-      return;
-    }
-
-    app.innerHTML = `
-      <section class="view">
-        <div>
-          <h2>${isEdit ? "栽培計画を編集" : "栽培計画を追加"}</h2>
-          <p class="empty-text">作付けや次に育てる作物の予定を、育成スケジュールとは別に登録します。</p>
-        </div>
-
-        <form class="form" id="crop-plan-form" novalidate>
-          <input type="hidden" name="id" value="${escapeHtml(plan ? plan.id : "")}">
-
-          <div class="field">
-            <label for="crop-plan-plot">区画</label>
-            <select id="crop-plan-plot" name="plotId" required>
-              ${plotOptions(plan ? plan.plotId : plots[0].id)}
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-crop">作物名</label>
-            <input id="crop-plan-crop" name="cropName" type="text" required maxlength="60" autocomplete="off" placeholder="例：じゃがいも" value="${escapeHtml(plan ? plan.cropName : "")}">
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-method">植え方</label>
-            <input id="crop-plan-method" name="plantingMethod" type="text" maxlength="80" autocomplete="off" placeholder="例：種まき / 苗の植え付け / 定植" value="${escapeHtml(plan ? plan.plantingMethod : "")}">
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-prep-days">開始前の準備日数</label>
-            <input id="crop-plan-prep-days" name="prepDaysBeforeStart" type="number" min="0" max="365" step="1" value="${escapeHtml(plan ? cropPlanPrepDays(plan) : 0)}">
-            <p class="form-help">次の作物の開始日から逆算して、現在の作物の撤去期限を計算します。</p>
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-start">開始日</label>
-            <input id="crop-plan-start" name="startDate" type="date" required value="${escapeHtml(plan ? plan.startDate : todayValue())}">
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-end">終了予定日</label>
-            <input id="crop-plan-end" name="endDate" type="date" required value="${escapeHtml(plan ? plan.endDate : todayValue())}">
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-status">状態</label>
-            <select id="crop-plan-status" name="status">
-              ${cropPlanStatusOptions(plan ? plan.status : "予定")}
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="crop-plan-memo">メモ</label>
-            <textarea id="crop-plan-memo" name="memo" maxlength="500" placeholder="植え付け予定、連作の注意、片付け予定など">${escapeHtml(plan ? plan.memo : "")}</textarea>
-            <p class="form-help">500文字まで保存できます。</p>
-          </div>
-
-          <div class="button-row">
-            <button class="btn btn--primary" type="button" data-action="save-crop-plan">保存する</button>
-            <button class="btn" type="button" data-action="go-crop-plans">キャンセル</button>
-          </div>
-        </form>
-      </section>
-    `;
-
-    const firstInput = app.querySelector("#crop-plan-crop");
-    if (firstInput) {
-      firstInput.focus();
-    }
-  }
-
-  function renderBackup() {
-    app.innerHTML = `
-      <section class="view">
-        ${flashMessageHtml()}
-        <div class="detail-header">
-          <div>
-            <h2>バックアップ</h2>
-            <p class="empty-text">端末変更やブラウザデータ削除に備えて、畑ノートのデータをJSONファイルで保存できます。</p>
-          </div>
-        </div>
-
-        <section class="section" aria-labelledby="backup-export-title">
-          <div class="panel">
-            <h3 id="backup-export-title">バックアップを書き出す</h3>
-            <p class="memo-text">区画、作業記録、育成スケジュール、畑レイアウト、栽培計画、写真をまとめてJSONファイルに出力します。</p>
-            <button class="btn btn--primary" type="button" data-action="export-backup">バックアップを書き出す</button>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="backup-import-title">
-          <div class="panel">
-            <h3 id="backup-import-title">バックアップを読み込む</h3>
-            <p class="memo-text">JSONファイルを選択すると、復元前に件数を確認できます。復元は現在のデータを上書きします。</p>
-            <div class="field">
-              <label for="backup-file">バックアップJSON</label>
-              <input id="backup-file" name="backupFile" type="file" accept="application/json,.json">
-            </div>
-          </div>
-          ${backupSummaryHtml(pendingBackupSummary)}
-        </section>
-
-        <section class="section" aria-labelledby="backup-note-title">
-          <div class="panel panel--empty">
-            <h3 id="backup-note-title">注意点</h3>
-            <p class="memo-text">復元は上書き復元です。現在の端末・ブラウザ内のデータと写真は、バックアップファイルの内容に置き換わります。</p>
-          </div>
-        </section>
-      </section>
-    `;
   }
 
   function savePlotFromForm(form) {
@@ -2084,176 +893,14 @@
     setRoute(`plot/${plot.id}`);
   }
 
-  function updateLayoutCell(cellId, plotId) {
-    layoutV2 = {
-      ...layoutV2,
-      cells: layoutV2.cells.map((cell) => {
-        if (cell.cellId !== cellId || cell.groupId) {
-          return cell;
-        }
-
-        return {
-          ...cell,
-          plotId: plotId || null
-        };
-      })
-    };
-
-    HatakeData.saveLayoutV2(layoutV2);
-    render();
-  }
-
-  function toggleLayoutCellSelection(cellId) {
-    selectedLayoutCellIds = selectedLayoutCellIds.includes(cellId)
-      ? selectedLayoutCellIds.filter((id) => id !== cellId)
-      : [...selectedLayoutCellIds, cellId];
-    render();
-  }
-
-  function removeCellsFromExistingGroups(cellIds) {
-    const targetCellIds = new Set(cellIds);
-    const groups = layoutV2.groups.map((group) => ({
-      ...group,
-      cellIds: group.cellIds.filter((cellId) => !targetCellIds.has(cellId))
-    })).filter((group) => group.cellIds.length);
-    const groupIds = new Set(groups.map((group) => group.id));
-
-    return {
-      ...layoutV2,
-      groups,
-      cells: layoutV2.cells.map((cell) => {
-        if (targetCellIds.has(cell.cellId) || !groupIds.has(cell.groupId)) {
-          return {
-            ...cell,
-            groupId: null
-          };
-        }
-
-        return cell;
-      })
-    };
-  }
-
-  function createLayoutGroupFromForm(form) {
-    if (selectedLayoutCellIds.length < 2) {
-      alert("2マス以上選択してください。");
-      return;
-    }
-
-    const formData = new FormData(form);
-    const plotId = String(formData.get("plotId") || "");
-    const label = String(formData.get("label") || "").trim();
-    const memo = String(formData.get("memo") || "").trim();
-
-    if (!label) {
-      alert("表示名を入力してください。");
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const groupId = HatakeData.createLayoutGroupId();
-    let nextLayout = removeCellsFromExistingGroups(selectedLayoutCellIds);
-    const group = {
-      id: groupId,
-      cellIds: [...selectedLayoutCellIds],
-      plotId: plotId || null,
-      label,
-      memo,
-      createdAt: now,
-      updatedAt: now
-    };
-
-    nextLayout = {
-      ...nextLayout,
-      groups: [...nextLayout.groups, group],
-      cells: nextLayout.cells.map((cell) => (
-        selectedLayoutCellIds.includes(cell.cellId)
-          ? { ...cell, plotId: plotId || null, groupId }
-          : cell
-      ))
-    };
-
-    layoutV2 = HatakeData.normalizeLayoutV2(nextLayout);
-    HatakeData.saveLayoutV2(layoutV2);
-    selectedLayoutCellIds = [];
-    setFlashMessage("選択マスをまとめました。");
-    render();
-  }
-
-  function saveLayoutGroupFromForm(form) {
-    const formData = new FormData(form);
-    const groupId = String(formData.get("groupId") || "");
-    const plotId = String(formData.get("plotId") || "");
-    const label = String(formData.get("label") || "").trim();
-    const memo = String(formData.get("memo") || "").trim();
-    const group = findLayoutGroup(groupId);
-
-    if (!group) {
-      alert("編集対象のグループが見つかりません。");
-      return;
-    }
-
-    if (!label) {
-      alert("表示名を入力してください。");
-      return;
-    }
-
-    const now = new Date().toISOString();
-    layoutV2 = HatakeData.normalizeLayoutV2({
-      ...layoutV2,
-      groups: layoutV2.groups.map((item) => (
-        item.id === groupId
-          ? { ...item, plotId: plotId || null, label, memo, updatedAt: now }
-          : item
-      )),
-      cells: layoutV2.cells.map((cell) => (
-        cell.groupId === groupId
-          ? { ...cell, plotId: plotId || null }
-          : cell
-      ))
-    });
-    HatakeData.saveLayoutV2(layoutV2);
-    setFlashMessage("まとめ済みエリアを更新しました。");
-    render();
-  }
-
-  function ungroupLayoutGroup(groupId) {
-    const group = findLayoutGroup(groupId);
-
-    if (!group) {
-      alert("解除対象のグループが見つかりません。");
-      return;
-    }
-
-    if (!confirm("この作付けエリアのグループを解除しますか？")) {
-      return;
-    }
-
-    layoutV2 = HatakeData.normalizeLayoutV2({
-      ...layoutV2,
-      groups: layoutV2.groups.filter((item) => item.id !== groupId),
-      cells: layoutV2.cells.map((cell) => (
-        cell.groupId === groupId
-          ? { ...cell, groupId: null, plotId: group.plotId || cell.plotId || null }
-          : cell
-      ))
-    });
-    HatakeData.saveLayoutV2(layoutV2);
-    selectedLayoutCellIds = selectedLayoutCellIds.filter((cellId) => !group.cellIds.includes(cellId));
-    setFlashMessage("グループを解除しました。");
-    render();
-  }
-
   async function saveWorkRecordFromForm(form) {
     const formData = new FormData(form);
-    const id = String(formData.get("id") || "");
     const now = new Date().toISOString();
-    const existingRecord = id ? findWorkRecord(id) : null;
     const plotId = String(formData.get("plotId") || "");
     const date = String(formData.get("date") || "");
     const workType = String(formData.get("workType") || "");
-    const workRecordId = existingRecord ? existingRecord.id : HatakeData.createWorkRecordId();
-    let photoIds = existingRecord ? workRecordPhotoIds(existingRecord) : [];
+    const workRecordId = HatakeData.createWorkRecordId();
+    let photoIds = [];
 
     if (!date || !plotId || !workType) {
       alert("日付、区画、作業内容を入力してください。");
@@ -2265,7 +912,7 @@
       return;
     }
 
-    if (!existingRecord && selectedPhotoFiles.length) {
+    if (selectedPhotoFiles.length) {
       try {
         const photos = await buildPhotoRecords(selectedPhotoFiles, workRecordId, plotId);
         await HatakeData.savePhotos(photos);
@@ -2277,15 +924,6 @@
       }
     }
 
-    if (existingRecord && existingRecord.plotId !== plotId && photoIds.length) {
-      try {
-        await HatakeData.updatePhotosPlot(photoIds, plotId);
-      } catch (error) {
-        console.error("写真情報の更新に失敗しました。", error);
-        setFlashMessage("作業記録は更新しましたが、写真情報の区画更新に失敗した可能性があります。");
-      }
-    }
-
     const workRecord = {
       id: workRecordId,
       plotId,
@@ -2293,101 +931,22 @@
       workType,
       memo: String(formData.get("memo") || "").trim(),
       photoIds,
-      createdAt: existingRecord ? existingRecord.createdAt : now,
+      createdAt: now,
       updatedAt: now
     };
 
-    if (existingRecord) {
-      workRecords = workRecords.map((record) => (record.id === workRecord.id ? workRecord : record));
-    } else {
-      workRecords = [workRecord, ...workRecords];
-    }
-
+    workRecords = [workRecord, ...workRecords];
     HatakeData.saveWorkRecords(workRecords);
     clearSelectedPhotos();
     setRoute(`plot/${plotId}`);
   }
 
-  async function deleteWorkRecord(workRecordId) {
-    const record = findWorkRecord(workRecordId);
-
-    if (!record) {
-      alert("削除対象の作業記録が見つかりません。");
-      return;
-    }
-
-    if (!confirm("この作業記録を削除しますか？")) {
-      return;
-    }
-
-    const photoIds = workRecordPhotoIds(record);
-
-    if (photoIds.length) {
-      try {
-        await HatakeData.deletePhotos(photoIds);
-      } catch (error) {
-        console.error("作業記録に紐づく写真の削除に失敗しました。", error);
-        setFlashMessage("写真の削除に失敗したため、作業記録は削除しませんでした。");
-        render();
-        return;
-      }
-    }
-
-    workRecords = workRecords.filter((item) => item.id !== workRecordId);
-    HatakeData.saveWorkRecords(workRecords);
-    setFlashMessage("作業記録を削除しました。");
-    render();
-  }
-
-  async function deletePhoto(photoId) {
-    if (!photoId) {
-      return;
-    }
-
-    if (!confirm("この写真を削除しますか？")) {
-      return;
-    }
-
-    const relatedRecord = workRecords.find((record) => workRecordPhotoIds(record).includes(photoId));
-
-    try {
-      await HatakeData.deletePhotos([photoId]);
-    } catch (error) {
-      console.error("写真の削除に失敗しました。", error);
-      setFlashMessage("写真の削除に失敗しました。");
-      render();
-      return;
-    }
-
-    if (relatedRecord) {
-      const now = new Date().toISOString();
-      workRecords = workRecords.map((record) => {
-        if (record.id !== relatedRecord.id) {
-          return record;
-        }
-
-        return {
-          ...record,
-          photoIds: workRecordPhotoIds(record).filter((id) => id !== photoId),
-          updatedAt: now
-        };
-      });
-      HatakeData.saveWorkRecords(workRecords);
-    }
-
-    setFlashMessage("写真を削除しました。");
-    render();
-  }
-
   function saveScheduleFromForm(form) {
     const formData = new FormData(form);
-    const id = String(formData.get("id") || "");
     const now = new Date().toISOString();
-    const existingSchedule = id ? findSchedule(id) : null;
     const plotId = String(formData.get("plotId") || "");
     const title = String(formData.get("title") || "").trim();
     const date = String(formData.get("date") || "");
-    const done = formData.get("done") === "on";
 
     if (!plotId || !title || !date) {
       alert("区画、作業予定名、予定日を入力してください。");
@@ -2400,22 +959,17 @@
     }
 
     const schedule = {
-      id: existingSchedule ? existingSchedule.id : HatakeData.createScheduleId(),
+      id: HatakeData.createScheduleId(),
       plotId,
       title,
       date,
       memo: String(formData.get("memo") || "").trim(),
-      done,
-      createdAt: existingSchedule ? existingSchedule.createdAt : now,
+      done: false,
+      createdAt: now,
       updatedAt: now
     };
 
-    if (existingSchedule) {
-      schedules = schedules.map((item) => (item.id === schedule.id ? schedule : item));
-    } else {
-      schedules = [schedule, ...schedules];
-    }
-
+    schedules = [schedule, ...schedules];
     HatakeData.saveSchedules(schedules);
     setRoute("schedules");
   }
@@ -2445,95 +999,6 @@
     render();
   }
 
-  function deleteSchedule(scheduleId) {
-    const schedule = findSchedule(scheduleId);
-
-    if (!schedule) {
-      alert("削除対象の予定が見つかりません。");
-      return;
-    }
-
-    if (!confirm("この予定を削除しますか？")) {
-      return;
-    }
-
-    schedules = schedules.filter((item) => item.id !== scheduleId);
-    HatakeData.saveSchedules(schedules);
-    setFlashMessage("予定を削除しました。");
-    render();
-  }
-
-  function saveCropPlanFromForm(form) {
-    const formData = new FormData(form);
-    const id = String(formData.get("id") || "");
-    const now = new Date().toISOString();
-    const existingPlan = id ? findCropPlan(id) : null;
-    const plotId = String(formData.get("plotId") || "");
-    const cropName = String(formData.get("cropName") || "").trim();
-    const startDate = String(formData.get("startDate") || "");
-    const endDate = String(formData.get("endDate") || "");
-    const prepDaysBeforeStartValue = Number(formData.get("prepDaysBeforeStart") || 0);
-    const prepDaysBeforeStart = Number.isFinite(prepDaysBeforeStartValue) && prepDaysBeforeStartValue > 0
-      ? Math.floor(prepDaysBeforeStartValue)
-      : 0;
-
-    if (!plotId || !cropName || !startDate || !endDate) {
-      alert("区画、作物名、開始日、終了予定日を入力してください。");
-      return;
-    }
-
-    if (!findPlot(plotId)) {
-      alert("選択した区画が見つかりません。区画一覧を確認してください。");
-      return;
-    }
-
-    if (endDate < startDate) {
-      alert("終了予定日は開始日以降の日付にしてください。");
-      return;
-    }
-
-    const cropPlan = {
-      id: existingPlan ? existingPlan.id : HatakeData.createCropPlanId(),
-      plotId,
-      cropName,
-      startDate,
-      endDate,
-      plantingMethod: String(formData.get("plantingMethod") || "").trim(),
-      prepDaysBeforeStart,
-      memo: String(formData.get("memo") || "").trim(),
-      status: String(formData.get("status") || "予定"),
-      createdAt: existingPlan ? existingPlan.createdAt : now,
-      updatedAt: now
-    };
-
-    if (existingPlan) {
-      cropPlans = cropPlans.map((plan) => (plan.id === cropPlan.id ? cropPlan : plan));
-    } else {
-      cropPlans = [cropPlan, ...cropPlans];
-    }
-
-    HatakeData.saveCropPlans(cropPlans);
-    setRoute("crop-plans");
-  }
-
-  function deleteCropPlan(cropPlanId) {
-    const plan = findCropPlan(cropPlanId);
-
-    if (!plan) {
-      alert("削除対象の栽培計画が見つかりません。");
-      return;
-    }
-
-    if (!confirm("この栽培計画を削除しますか？")) {
-      return;
-    }
-
-    cropPlans = cropPlans.filter((item) => item.id !== cropPlanId);
-    HatakeData.saveCropPlans(cropPlans);
-    setFlashMessage("栽培計画を削除しました。");
-    render();
-  }
-
   function handleClick(event) {
     const target = event.target.closest("[data-action], [data-nav]");
     if (!target) {
@@ -2555,60 +1020,10 @@
     if (action === "go-new") setRoute("plot-new");
     if (action === "go-work-new") setRoute("work-new");
     if (action === "go-schedule-new") setRoute("schedule-new");
-    if (action === "go-crop-plans") setRoute("crop-plans");
-    if (action === "go-crop-plan-new") setRoute("crop-plan-new");
-    if (action === "go-backup") setRoute("backup");
-    if (action === "toggle-layout-edit") {
-      isLayoutEditMode = !isLayoutEditMode;
-      if (!isLayoutEditMode) {
-        isLayoutMultiSelectMode = false;
-        selectedLayoutCellIds = [];
-      }
-      render();
-    }
-    if (action === "toggle-layout-multi-select") {
-      isLayoutMultiSelectMode = !isLayoutMultiSelectMode;
-      selectedLayoutCellIds = [];
-      render();
-    }
-    if (action === "clear-layout-selection") {
-      selectedLayoutCellIds = [];
-      render();
-    }
-    if (action === "toggle-layout-cell-selection") {
-      toggleLayoutCellSelection(target.dataset.cellId);
-    }
-    if (action === "create-layout-group") {
-      const form = target.closest("#layout-group-create-form");
-      if (form) {
-        createLayoutGroupFromForm(form);
-      }
-    }
-    if (action === "save-layout-group") {
-      const form = target.closest("[data-layout-group-form]");
-      if (form) {
-        saveLayoutGroupFromForm(form);
-      }
-    }
-    if (action === "ungroup-layout-group") {
-      ungroupLayoutGroup(target.dataset.id);
-    }
-    if (action === "toggle-layout-edit" || action === "toggle-layout-multi-select" || action === "clear-layout-selection" || action === "toggle-layout-cell-selection" || action === "create-layout-group" || action === "save-layout-group" || action === "ungroup-layout-group") {
-      return;
-    }
     if (action === "open-photo") openPhotoModal(target.dataset.photoUrl);
     if (action === "close-photo") closePhotoModal();
     if (action === "open-plot") setRoute(`plot/${target.dataset.id}`);
     if (action === "edit-plot") setRoute(`plot-edit/${target.dataset.id}`);
-    if (action === "edit-work-record") setRoute(`work-edit/${target.dataset.id}`);
-    if (action === "delete-work-record") deleteWorkRecord(target.dataset.id);
-    if (action === "delete-photo") deletePhoto(target.dataset.id);
-    if (action === "edit-schedule") setRoute(`schedule-edit/${target.dataset.id}`);
-    if (action === "delete-schedule") deleteSchedule(target.dataset.id);
-    if (action === "edit-crop-plan") setRoute(`crop-plan-edit/${target.dataset.id}`);
-    if (action === "delete-crop-plan") deleteCropPlan(target.dataset.id);
-    if (action === "export-backup") exportBackup();
-    if (action === "restore-backup") restoreBackup();
     if (action === "cancel-edit") setRoute(`plot/${target.dataset.id}`);
     if (action === "save-plot") {
       const form = target.closest("#plot-form");
@@ -2628,12 +1043,6 @@
         saveScheduleFromForm(form);
       }
     }
-    if (action === "save-crop-plan") {
-      const form = target.closest("#crop-plan-form");
-      if (form) {
-        saveCropPlanFromForm(form);
-      }
-    }
   }
 
   function handleSubmit(event) {
@@ -2651,11 +1060,6 @@
       event.preventDefault();
       saveScheduleFromForm(event.target);
     }
-
-    if (event.target.id === "crop-plan-form") {
-      event.preventDefault();
-      saveCropPlanFromForm(event.target);
-    }
   }
 
   function handleChange(event) {
@@ -2669,25 +1073,10 @@
     if (target.matches('[data-action="toggle-schedule-done"]')) {
       updateScheduleDone(target.dataset.id, target.checked);
     }
-
-    if (target.matches("[data-layout-cell-id]")) {
-      updateLayoutCell(target.dataset.layoutCellId, target.value);
-    }
-
-    if (target.matches("#backup-file")) {
-      prepareBackupRestore(target.files && target.files[0]);
-    }
   }
 
   function render() {
     const route = getRoute();
-
-    if (route !== "home") {
-      isLayoutEditMode = false;
-      isLayoutMultiSelectMode = false;
-      selectedLayoutCellIds = [];
-    }
-
     setActiveNav(route);
 
     if (route === "home") {
@@ -2710,43 +1099,13 @@
       return;
     }
 
-    if (route.startsWith("work-edit/")) {
-      renderWorkRecordForm(route.replace("work-edit/", ""));
-      return;
-    }
-
     if (route === "schedules") {
       renderScheduleList();
       return;
     }
 
-    if (route === "crop-plans") {
-      renderCropPlanList();
-      return;
-    }
-
-    if (route === "backup") {
-      renderBackup();
-      return;
-    }
-
-    if (route === "crop-plan-new") {
-      renderCropPlanForm();
-      return;
-    }
-
-    if (route.startsWith("crop-plan-edit/")) {
-      renderCropPlanForm(route.replace("crop-plan-edit/", ""));
-      return;
-    }
-
     if (route === "schedule-new") {
       renderScheduleForm();
-      return;
-    }
-
-    if (route.startsWith("schedule-edit/")) {
-      renderScheduleForm(route.replace("schedule-edit/", ""));
       return;
     }
 
