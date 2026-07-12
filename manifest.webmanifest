@@ -1,0 +1,28 @@
+{
+    "name":  "畑ノート",
+    "short_name":  "畑",
+    "start_url":  "./",
+    "display":  "standalone",
+    "background_color":  "#0F1B2D",
+    "theme_color":  "#3FA34D",
+    "icons":  [
+                  {
+                      "src":  "./icons/icon-192-final.png?v=lc-final-20260712",
+                      "sizes":  "192x192",
+                      "type":  "image/png",
+                      "purpose":  "any"
+                  },
+                  {
+                      "src":  "./icons/icon-512-final.png?v=lc-final-20260712",
+                      "sizes":  "512x512",
+                      "type":  "image/png",
+                      "purpose":  "any"
+                  },
+                  {
+                      "src":  "./icons/icon-maskable-512-final.png?v=lc-final-20260712",
+                      "sizes":  "512x512",
+                      "type":  "image/png",
+                      "purpose":  "maskable"
+                  }
+              ]
+}
