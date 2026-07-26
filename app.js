@@ -20,11 +20,16 @@
     "#cce1eb",
     "#e5e1bb",
   ];
+  const FIELD_CELL_ORDER = [
+    1, 5, 9, 13,
+    2, 6, 10, 14,
+    3, 7, 11, 15,
+    4, 8, 12, 16,
+  ];
 
   const state = {
     route: "field",
     plans: [],
-    selectedDate: todayValue(),
     annualYear: Number(todayValue().slice(0, 4)),
     selectionMode: false,
     selectedCells: new Set(),
@@ -71,21 +76,6 @@
     return dateToValue(date);
   }
 
-  function shiftMonth(dateValue, amount) {
-    const [year, month, day] = dateValue.split("-").map(Number);
-    const firstOfTarget = new Date(year, month - 1 + amount, 1, 12, 0, 0);
-    const lastDay = new Date(
-      firstOfTarget.getFullYear(),
-      firstOfTarget.getMonth() + 1,
-      0,
-      12,
-      0,
-      0,
-    ).getDate();
-    firstOfTarget.setDate(Math.min(day, lastDay));
-    return dateToValue(firstOfTarget);
-  }
-
   function formatDate(dateValue) {
     if (!dateValue) {
       return "未設定";
@@ -113,10 +103,6 @@
 
   function formatCells(cellIds) {
     return Data.normalizeCellIds(cellIds).join("・");
-  }
-
-  function planMarker(plan) {
-    return plan.id.slice(-4).toUpperCase();
   }
 
   function colorForCrop(cropName) {
@@ -164,39 +150,65 @@
     renderField();
   }
 
-  function activePlanForCell(cellId) {
-    return Data.planAtCellOnDate(state.plans, cellId, state.selectedDate);
+  function fieldDisplayForCell(cellId, referenceDate) {
+    const currentPlan = Data.planAtCellOnDate(
+      state.plans,
+      cellId,
+      referenceDate,
+    );
+    if (currentPlan) {
+      return { plan: currentPlan, kind: "current" };
+    }
+
+    const nextPlan =
+      state.plans
+        .filter(
+          (plan) =>
+            plan.cellIds.includes(cellId) && plan.startDate > referenceDate,
+        )
+        .sort(
+          (first, second) =>
+            first.startDate.localeCompare(second.startDate) ||
+            first.cropName.localeCompare(second.cropName, "ja"),
+        )[0] || null;
+
+    return nextPlan ? { plan: nextPlan, kind: "future" } : null;
   }
 
-  function sharedEdgeClasses(cellId, plan) {
-    if (!plan) {
+  function sharedEdgeClasses(cellId, display, displayByCell) {
+    if (!display) {
       return "";
     }
 
     const classes = [];
-    const column = (cellId - 1) % 4;
-    const samePlan = (otherCellId) =>
-      otherCellId >= 1 &&
-      otherCellId <= 16 &&
-      activePlanForCell(otherCellId)?.id === plan.id;
+    const row = (cellId - 1) % 4;
+    const column = Math.floor((cellId - 1) / 4);
+    const samePlan = (otherCellId) => {
+      const otherDisplay = displayByCell.get(otherCellId);
+      return (
+        otherDisplay?.plan.id === display.plan.id &&
+        otherDisplay?.kind === display.kind
+      );
+    };
 
-    if (column > 0 && samePlan(cellId - 1)) {
+    if (column > 0 && samePlan(cellId - 4)) {
       classes.push("joined-left");
     }
-    if (column < 3 && samePlan(cellId + 1)) {
+    if (column < 3 && samePlan(cellId + 4)) {
       classes.push("joined-right");
     }
-    if (cellId > 4 && samePlan(cellId - 4)) {
+    if (row > 0 && samePlan(cellId - 1)) {
       classes.push("joined-top");
     }
-    if (cellId <= 12 && samePlan(cellId + 4)) {
+    if (row < 3 && samePlan(cellId + 1)) {
       classes.push("joined-bottom");
     }
     return classes.join(" ");
   }
 
-  function fieldCellHtml(cellId) {
-    const plan = activePlanForCell(cellId);
+  function fieldCellHtml(cellId, displayByCell) {
+    const display = displayByCell.get(cellId);
+    const plan = display?.plan || null;
     const selected = state.selectedCells.has(cellId);
     const style = plan
       ? `style="--crop-color:${colorForCrop(plan.cropName)}"`
@@ -204,17 +216,25 @@
     const classes = [
       "field-cell",
       plan ? "has-plan" : "is-empty",
+      display?.kind === "current" ? "is-current" : "",
+      display?.kind === "future" ? "is-future" : "",
       selected ? "is-selected" : "",
-      sharedEdgeClasses(cellId, plan),
+      sharedEdgeClasses(cellId, display, displayByCell),
     ]
       .filter(Boolean)
       .join(" ");
 
+    const displayLabel =
+      display?.kind === "current"
+        ? `${plan.cropName}、栽培中、${formatDate(plan.endDate)}終了予定`
+        : display?.kind === "future"
+          ? `次作予定、${plan.cropName}、${formatDate(plan.startDate)}開始`
+          : "空き";
     const ariaLabel = state.selectionMode
-      ? `マス${cellId}、${plan ? plan.cropName : "空き"}、${
+      ? `マス${cellId}、${displayLabel}、${
           selected ? "選択中" : "未選択"
         }`
-      : `マス${cellId}、${plan ? plan.cropName : "空き"}`;
+      : `マス${cellId}、${displayLabel}`;
 
     return `
       <button
@@ -228,17 +248,23 @@
       >
         <span class="cell-number">${cellId}</span>
         ${
-          plan
+          display?.kind === "current"
             ? `
+              <span class="cell-status">栽培中</span>
               <span class="cell-crop" title="${escapeHtml(plan.cropName)}">${escapeHtml(
                 plan.cropName,
               )}</span>
-              <span class="cell-period">${escapeHtml(
-                `${formatCellDate(plan.startDate)}〜${formatCellDate(plan.endDate)}`,
-              )}</span>
-              <span class="cell-plan-id">ID ${escapeHtml(planMarker(plan))}</span>
+              <span class="cell-date">${escapeHtml(formatCellDate(plan.endDate))}終了</span>
             `
-            : `<span class="cell-empty-label">空き</span>`
+            : display?.kind === "future"
+              ? `
+                <span class="cell-status cell-status-next">次</span>
+                <span class="cell-crop" title="${escapeHtml(plan.cropName)}">${escapeHtml(
+                  plan.cropName,
+                )}</span>
+                <span class="cell-date">${escapeHtml(formatCellDate(plan.startDate))}開始</span>
+              `
+              : `<span class="cell-empty-label">空き</span>`
         }
         ${state.selectionMode ? '<span class="selection-mark" aria-hidden="true"></span>' : ""}
       </button>
@@ -286,116 +312,112 @@
   }
 
   function renderField() {
+    const referenceDate = todayValue();
+    const displayByCell = new Map(
+      Array.from({ length: 16 }, (_, index) => {
+        const cellId = index + 1;
+        return [cellId, fieldDisplayForCell(cellId, referenceDate)];
+      }),
+    );
+
     app.innerHTML = `
       <section class="screen field-screen" aria-labelledby="field-title">
         <div class="screen-heading">
           <div>
-            <p class="eyebrow">表示日の畑</p>
-            <h2 id="field-title">${escapeHtml(formatDateLong(state.selectedDate))}</h2>
+            <p class="eyebrow">今日の畑</p>
+            <h2 id="field-title">${escapeHtml(formatDateLong(referenceDate))}</h2>
           </div>
           <button type="button" class="button button-primary" data-action="new-plan">
             新しい作付け
           </button>
         </div>
 
-        <section class="date-controls" aria-label="畑の表示日">
-          <button
-            type="button"
-            class="icon-button"
-            data-action="previous-month"
-            aria-label="前月の同じ日へ"
-            title="前月"
-          >
-            ‹
-          </button>
-          <label class="date-input-label">
-            <span>表示日</span>
-            <input
-              type="date"
-              id="field-date"
-              value="${escapeHtml(state.selectedDate)}"
-            />
-          </label>
-          <button
-            type="button"
-            class="icon-button"
-            data-action="next-month"
-            aria-label="次月の同じ日へ"
-            title="次月"
-          >
-            ›
-          </button>
-          <button type="button" class="button button-subtle today-button" data-action="today">
-            今日
-          </button>
-        </section>
-
         ${state.selectionMode ? selectionToolbarHtml() : ""}
 
         <div class="field-grid" aria-label="4×4の畑図">
-          ${Array.from({ length: 16 }, (_, index) => fieldCellHtml(index + 1)).join("")}
+          ${FIELD_CELL_ORDER.map((cellId) => fieldCellHtml(cellId, displayByCell)).join("")}
         </div>
 
         <p class="screen-note">
-          作物のあるマスをタップすると、作付けの詳細を確認できます。
+          栽培中の作物と、空いているマスの最も近い次作予定を表示しています。
         </p>
       </section>
     `;
   }
 
-  function yearPlanSort(first, second) {
-    const firstCell = Math.min(...first.cellIds);
-    const secondCell = Math.min(...second.cellIds);
-    return (
-      firstCell - secondCell ||
-      first.startDate.localeCompare(second.startDate) ||
-      first.cropName.localeCompare(second.cropName, "ja")
-    );
+  function plansForCellMonth(cellId, monthIndex) {
+    return state.plans
+      .filter(
+        (plan) =>
+          plan.cellIds.includes(cellId) &&
+          Data.planOverlapsMonth(plan, state.annualYear, monthIndex),
+      )
+      .sort(
+        (first, second) =>
+          first.startDate.localeCompare(second.startDate) ||
+          first.endDate.localeCompare(second.endDate) ||
+          first.cropName.localeCompare(second.cropName, "ja"),
+      );
   }
 
-  function yearRowHtml(plan) {
-    const color = colorForCrop(plan.cropName);
-    const monthCells = Array.from({ length: 12 }, (_, monthIndex) => {
-      const active = Data.planOverlapsMonth(plan, state.annualYear, monthIndex);
+  function yearMonthCellHtml(cellId, monthIndex) {
+    const plans = plansForCellMonth(cellId, monthIndex);
+    const month = monthIndex + 1;
+
+    if (!plans.length) {
       return `
-        <td
-          class="month-cell ${active ? "is-active" : ""}"
-          ${active ? `style="--crop-color:${color}"` : ""}
-          aria-label="${monthIndex + 1}月 ${active ? "作付け期間" : "空き"}"
-        >
-          ${active ? '<span class="month-band" aria-hidden="true"></span>' : ""}
+        <td class="month-cell is-empty" aria-label="マス${cellId} ${month}月 空き">
+          <span class="month-empty-label">空き</span>
         </td>
       `;
-    }).join("");
+    }
 
     return `
-      <tr
-        class="year-plan-row"
-        data-plan-row-id="${escapeHtml(plan.id)}"
-        tabindex="0"
-        aria-label="${escapeHtml(
-          `マス${formatCells(plan.cellIds)} ${plan.cropName} ${formatDate(
-            plan.startDate,
-          )}から${formatDate(plan.endDate)}`,
-        )}"
-      >
-        <td class="sticky-cell sticky-cells">${escapeHtml(formatCells(plan.cellIds))}</td>
-        <td class="sticky-cell sticky-crop">
-          <span class="crop-dot" style="--crop-color:${color}" aria-hidden="true"></span>
-          <span title="${escapeHtml(plan.cropName)}">${escapeHtml(plan.cropName)}</span>
-        </td>
-        <td class="date-column">${escapeHtml(formatDate(plan.startDate))}</td>
-        <td class="date-column">${escapeHtml(formatDate(plan.endDate))}</td>
-        ${monthCells}
+      <td class="month-cell" aria-label="マス${cellId} ${month}月 ${escapeHtml(
+        plans.map((plan) => plan.cropName).join("、"),
+      )}">
+        <div class="month-plan-stack">
+          ${plans
+            .map(
+              (plan) => `
+                <button
+                  type="button"
+                  class="month-plan-label"
+                  data-year-plan-id="${escapeHtml(plan.id)}"
+                  style="--crop-color:${colorForCrop(plan.cropName)}"
+                  title="${escapeHtml(
+                    `${plan.cropName} ${formatDate(plan.startDate)}〜${formatDate(
+                      plan.endDate,
+                    )}`,
+                  )}"
+                  aria-label="${escapeHtml(
+                    `${plan.cropName}、${formatDate(plan.startDate)}から${formatDate(
+                      plan.endDate,
+                    )}`,
+                  )}"
+                >
+                  ${escapeHtml(plan.cropName)}
+                </button>
+              `,
+            )
+            .join("")}
+        </div>
+      </td>
+    `;
+  }
+
+  function yearCellRowHtml(cellId) {
+    return `
+      <tr data-year-cell-id="${cellId}">
+        <th scope="row" class="sticky-cell sticky-cells">マス${cellId}</th>
+        ${Array.from({ length: 12 }, (_, monthIndex) =>
+          yearMonthCellHtml(cellId, monthIndex),
+        ).join("")}
       </tr>
     `;
   }
 
   function renderYear() {
-    const plans = state.plans
-      .filter((plan) => Data.planIntersectsYear(plan, state.annualYear))
-      .sort(yearPlanSort);
-
     app.innerHTML = `
       <section class="screen year-screen" aria-labelledby="year-title">
         <div class="screen-heading">
@@ -421,35 +443,25 @@
           </button>
         </div>
 
-        ${
-          plans.length
-            ? `
-              <div class="year-table-scroll" tabindex="0" aria-label="${state.annualYear}年の作付け表">
-                <table class="year-table">
-                  <thead>
-                    <tr>
-                      <th class="sticky-cell sticky-cells">使用マス</th>
-                      <th class="sticky-cell sticky-crop">作物名</th>
-                      <th>開始日</th>
-                      <th>終了予定日</th>
-                      ${Array.from(
-                        { length: 12 },
-                        (_, index) => `<th class="month-heading">${index + 1}月</th>`,
-                      ).join("")}
-                    </tr>
-                  </thead>
-                  <tbody>${plans.map(yearRowHtml).join("")}</tbody>
-                </table>
-              </div>
-              <p class="screen-note">表は横にスクロールできます。行をタップすると詳細を開きます。</p>
-            `
-            : `
-              <div class="empty-state">
-                <h3>${state.annualYear}年の作付けはありません</h3>
-                <p>「新しい作付け」から畑マスと期間を登録してください。</p>
-              </div>
-            `
-        }
+        <div class="year-table-scroll" tabindex="0" aria-label="${state.annualYear}年の作付け表">
+          <table class="year-table">
+            <thead>
+              <tr>
+                <th class="sticky-cell sticky-cells">マス番号</th>
+                ${Array.from(
+                  { length: 12 },
+                  (_, index) => `<th class="month-heading">${index + 1}月</th>`,
+                ).join("")}
+              </tr>
+            </thead>
+            <tbody>
+              ${Array.from({ length: 16 }, (_, index) => yearCellRowHtml(index + 1)).join("")}
+            </tbody>
+          </table>
+        </div>
+        <p class="screen-note">
+          表は横にスクロールできます。作物名をタップすると詳細を開きます。
+        </p>
       </section>
     `;
   }
@@ -529,7 +541,8 @@
   }
 
   function planDetailHtml(plan) {
-    const status = Data.planStatusAtDate(plan, state.selectedDate);
+    const referenceDate = todayValue();
+    const status = Data.planStatusAtDate(plan, referenceDate);
     const statusClass =
       status === "栽培中" ? "status-active" : status === "今後の予定" ? "status-future" : "";
 
@@ -548,7 +561,7 @@
           <div><dt>開始日</dt><dd>${escapeHtml(formatDate(plan.startDate))}</dd></div>
           <div><dt>終了予定日</dt><dd>${escapeHtml(formatDate(plan.endDate))}</dd></div>
           <div>
-            <dt>${escapeHtml(formatDate(state.selectedDate))}時点</dt>
+            <dt>${escapeHtml(formatDate(referenceDate))}時点</dt>
             <dd>${escapeHtml(status)}</dd>
           </div>
           <div class="detail-memo">
@@ -592,8 +605,7 @@
   }
 
   function formCellButtonsHtml() {
-    return Array.from({ length: 16 }, (_, index) => {
-      const cellId = index + 1;
+    return FIELD_CELL_ORDER.map((cellId) => {
       const selected = state.formCellIds.has(cellId);
       return `
         <button
@@ -616,7 +628,7 @@
       plan ? plan.cellIds : [...state.selectedCells].sort((a, b) => a - b),
     );
 
-    const startDate = plan?.startDate || state.selectedDate;
+    const startDate = plan?.startDate || todayValue();
     const endDate = plan?.endDate || addDays(startDate, 90);
 
     openDialog(`
@@ -904,7 +916,6 @@
     try {
       state.plans = Data.saveCropPlans(state.pendingBackup.cropPlans);
       state.pendingBackup = null;
-      state.selectedDate = todayValue();
       setRoute("field");
       showToast("バックアップを復元しました。");
     } catch (error) {
@@ -952,9 +963,9 @@
       return;
     }
 
-    const yearRow = event.target.closest("[data-plan-row-id]");
-    if (yearRow) {
-      showPlanDetail(yearRow.dataset.planRowId);
+    const yearPlanLabel = event.target.closest("[data-year-plan-id]");
+    if (yearPlanLabel) {
+      showPlanDetail(yearPlanLabel.dataset.yearPlanId);
       return;
     }
 
@@ -964,16 +975,7 @@
     }
 
     const action = actionElement.dataset.action;
-    if (action === "previous-month") {
-      state.selectedDate = shiftMonth(state.selectedDate, -1);
-      renderField();
-    } else if (action === "next-month") {
-      state.selectedDate = shiftMonth(state.selectedDate, 1);
-      renderField();
-    } else if (action === "today") {
-      state.selectedDate = todayValue();
-      renderField();
-    } else if (action === "new-plan" || action === "new-plan-from-year") {
+    if (action === "new-plan" || action === "new-plan-from-year") {
       beginNewPlan();
     } else if (action === "selection-clear") {
       state.selectedCells.clear();
@@ -1007,12 +1009,6 @@
   }
 
   function handleAppChange(event) {
-    if (event.target.id === "field-date" && event.target.value) {
-      state.selectedDate = event.target.value;
-      renderField();
-      return;
-    }
-
     if (event.target.id === "backup-file") {
       readBackupFile(event.target.files?.[0] || null);
     }
@@ -1068,13 +1064,6 @@
 
     app.addEventListener("click", handleAppClick);
     app.addEventListener("change", handleAppChange);
-    app.addEventListener("keydown", (event) => {
-      const row = event.target.closest("[data-plan-row-id]");
-      if (row && (event.key === "Enter" || event.key === " ")) {
-        event.preventDefault();
-        showPlanDetail(row.dataset.planRowId);
-      }
-    });
 
     dialogContent.addEventListener("click", handleDialogClick);
     dialogContent.addEventListener("submit", (event) => {

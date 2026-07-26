@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "hatakeNoteV2.cropPlans.v1";
   const APP_NAME = "hatake-note-v2";
-  const APP_VERSION = "2.0-prototype1";
+  const APP_VERSION = "2.0-prototype2";
   const BACKUP_VERSION = 1;
   const CELL_MIN = 1;
   const CELL_MAX = 16;
