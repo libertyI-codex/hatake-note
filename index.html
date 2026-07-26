@@ -1,48 +1,57 @@
 <!doctype html>
 <html lang="ja">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>畑ノート ローカル版 Ver.1.4 試作1</title>
-    <link rel="stylesheet" href="style.css?v=14p1">
-      <link rel="icon" type="image/svg+xml" href="./icons/favicon-final.svg?v=lc-final-20260712">
-    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-final.png?v=lc-final-20260712">
-    <link rel="manifest" href="./manifest.webmanifest?v=lc-final-20260712">
-</head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="4×4の畑と作付け期間をシンプルに管理するローカルWebアプリ"
+    />
+    <title>畑ノート Ver.2.0 試作1</title>
+    <link rel="stylesheet" href="style.css?v=20p1" />
+    <script src="data.js?v=20p1" defer></script>
+    <script src="app.js?v=20p1" defer></script>
+  </head>
   <body>
     <div class="app-shell">
       <header class="app-header">
-        <p class="app-kicker">ローカル版 Ver.1.4 試作1</p>
-        <h1>畑ノート</h1>
+        <div>
+          <p class="app-version">Ver.2.0 試作1</p>
+          <h1>畑ノート</h1>
+        </div>
       </header>
 
-      <main id="app" class="app-main" aria-live="polite"></main>
+      <main id="app" class="app-main" tabindex="-1"></main>
 
-      <nav class="bottom-nav" aria-label="画面下部ナビゲーション">
-        <button class="bottom-nav__item" type="button" data-nav="home">
-          <span class="bottom-nav__icon" aria-hidden="true">⌂</span>
-          <span>ホーム</span>
+      <nav class="bottom-nav" aria-label="メインメニュー">
+        <button type="button" class="nav-button is-active" data-route="field">
+          <span class="nav-icon" aria-hidden="true">田</span>
+          <span>畑</span>
         </button>
-        <button class="bottom-nav__item" type="button" data-nav="plots">
-          <span class="bottom-nav__icon" aria-hidden="true">□</span>
-          <span>区画</span>
+        <button type="button" class="nav-button" data-route="year">
+          <span class="nav-icon" aria-hidden="true">暦</span>
+          <span>年間予定</span>
         </button>
-        <button class="bottom-nav__item" type="button" data-nav="work">
-          <span class="bottom-nav__icon" aria-hidden="true">✎</span>
-          <span>記録</span>
-        </button>
-        <button class="bottom-nav__item" type="button" data-nav="schedules">
-          <span class="bottom-nav__icon" aria-hidden="true">✓</span>
-          <span>予定</span>
-        </button>
-        <button class="bottom-nav__item" type="button" data-nav="new">
-          <span class="bottom-nav__icon" aria-hidden="true">＋</span>
-          <span>追加</span>
+        <button type="button" class="nav-button" data-route="data">
+          <span class="nav-icon" aria-hidden="true">保</span>
+          <span>データ</span>
         </button>
       </nav>
     </div>
 
-    <script src="data.js?v=14p1"></script>
-    <script src="app.js?v=14p1"></script>
+    <dialog id="app-dialog" class="app-dialog">
+      <div id="dialog-content"></div>
+    </dialog>
+
+    <div
+      id="toast"
+      class="toast"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
   </body>
 </html>
